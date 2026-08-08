@@ -14,6 +14,7 @@ Global options (before the subcommand):
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Callable
 from pathlib import Path
@@ -21,7 +22,7 @@ from typing import Annotated, Any
 
 import typer
 
-from . import RULES_VERSION, __version__, services
+from . import RULES_VERSION, __version__, onboard, services
 from .config import Workspace, ensure_workspace, load_yaml_model, resolve_data_dir, resolve_workspace
 from .db import Database
 from .errors import ProviderError, SeoWriterError, UsageError, ValidationFailedError
@@ -35,12 +36,18 @@ brand_facts_app = typer.Typer(help="Per-brand fact ledger.", no_args_is_help=Tru
 brand_policy_app = typer.Typer(help="Per-brand run policy.", no_args_is_help=True)
 project_app = typer.Typer(help="Project management.", no_args_is_help=True)
 run_app = typer.Typer(help="ArticleRun lifecycle.", no_args_is_help=True)
+onboard_app = typer.Typer(help="New-brand onboarding (site memory, crawl, audit, confirmation).",
+    no_args_is_help=True,)
+providers_app = typer.Typer(help="Provider credential configuration (DataForSEO, Reddit).",
+    no_args_is_help=True,)
 
 app.add_typer(brand_app, name="brand")
 brand_app.add_typer(brand_facts_app, name="facts")
 brand_app.add_typer(brand_policy_app, name="policy")
 app.add_typer(project_app, name="project")
 app.add_typer(run_app, name="run")
+app.add_typer(onboard_app, name="onboard")
+app.add_typer(providers_app, name="providers")
 
 
 class Ctx:
@@ -148,6 +155,152 @@ def init() -> None:
             "cli_version": __version__,
         }
     )
+
+
+# ---------------------------------------------------------------------------
+# onboard
+# ---------------------------------------------------------------------------
+
+_PROVIDER_ENV_HINTS = {
+    "dataforseo.login": "DATAFORSEO_LOGIN",
+    "dataforseo.password": "DATAFORSEO_PASSWORD",
+    "reddit.client_id": "REDDIT_CLIENT_ID",
+    "reddit.client_secret": "REDDIT_CLIENT_SECRET",
+}
+
+
+def _prompt_provider_values(prov: str) -> dict[str, str]:
+    if state.json:
+        raise UsageError("interactive setup needs a terminal; run without --json or set provider env vars")
+    values: dict[str, str] = {}
+    for key, label in onboard.PROVIDERS[prov].items():
+        is_secret = key in ("password", "client_secret")
+        env_name = _PROVIDER_ENV_HINTS.get(f"{prov}.{key}")
+        env_hint = os.environ.get(env_name or "", "") if env_name else ""
+        prompt_text = f"{prov} {label}" + (" (enter = env)" if env_hint else "")
+        val = typer.prompt(prompt_text, default="", hide_input=is_secret)
+        values[key] = val if val else env_hint
+    return values
+
+
+@onboard_app.command("site")
+def onboard_site(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    url: Annotated[str | None, typer.Option(help="Customer website URL (https://…)")] = None,
+) -> None:
+    """Step 1 — record the customer's website as local brand memory."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, slug)
+        site_url = url
+        if site_url is None:
+            if state.json:
+                raise UsageError("interactive prompt needs a terminal; pass --url <https://…>")
+            site_url = typer.prompt("Customer website URL")
+        return onboard.save_site(ws, slug, site_url)
+
+    return _guard(run)
+
+
+@onboard_app.command("fetch")
+def onboard_fetch(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+) -> None:
+    """Step 2 — crawl the recorded website (plain HTTP, no key) and run the baseline SEO audit."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, slug)
+        return onboard.fetch_site(ws, slug)
+
+    return _guard(run)
+
+
+@onboard_app.command("status")
+def onboard_status(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+) -> None:
+    """Show onboarding progress for a brand."""
+
+    def run() -> dict:
+        ws, _ = _open()
+        return onboard.site_status(ws, slug)
+
+    return _guard(run)
+
+
+@onboard_app.command("confirm")
+def onboard_confirm(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    approver: Annotated[str | None, typer.Option(help="Who confirms the feature summary")] = None,
+) -> None:
+    """Step 3 — confirm the agent-authored feature summary after customer review."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, slug)
+        return onboard.confirm_features(ws, slug, approver or os.environ.get("USER", "cli"))
+
+    return _guard(run)
+
+
+# ---------------------------------------------------------------------------
+# providers
+# ---------------------------------------------------------------------------
+
+
+@providers_app.command("configure")
+def providers_configure(
+    name: Annotated[
+        str | None, typer.Option(help="Provider to configure: dataforseo | reddit (default: both)")
+    ] = None,
+) -> None:
+    """Configure provider credentials; secrets go to a chmod-600 file, then verified live."""
+
+    def run() -> dict:
+        _open()
+        targets = [name] if name else list(onboard.PROVIDERS)
+        results: dict[str, dict] = {}
+        for prov in targets:
+            results[prov] = onboard.configure_provider(state.data_dir, prov, _prompt_provider_values(prov))
+        return {"providers": results}
+
+    return _guard(run)
+
+
+@providers_app.command("verify")
+def providers_verify(
+    name: Annotated[
+        str | None, typer.Option(help="Provider to re-verify: dataforseo | reddit (default: both)")
+    ] = None,
+) -> None:
+    """Re-verify stored credentials against the live endpoints."""
+
+    def run() -> dict:
+        _open()
+        secrets = onboard.load_secrets(state.data_dir)
+        targets = [name] if name else list(onboard.PROVIDERS)
+        results: dict[str, dict] = {}
+        for prov in targets:
+            stored = secrets.get(prov) or {}
+            if not all(stored.get(f) for f in onboard.PROVIDERS[prov]):
+                raise UsageError(f"provider '{prov}' is not configured; run `seo-writer providers configure`")
+            results[prov] = onboard.verify_provider(state.data_dir, prov, stored)
+        return {"providers": results}
+
+    return _guard(run)
+
+
+@providers_app.command("status")
+def providers_status() -> None:
+    """Show configured/verified state for each provider (never prints secrets)."""
+
+    def run() -> dict:
+        _open()
+        return onboard.provider_status(state.data_dir)
+
+    return _guard(run)
 
 
 # ---------------------------------------------------------------------------

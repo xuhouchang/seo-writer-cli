@@ -10,10 +10,13 @@ substantive product claim in the final copy is traceable to an approved entry
 in the brand's facts ledger, and every blocking rule is enforced with an audit
 trail — never silently downgraded.
 
-Phase 1 MVP is fully **offline and deterministic**: all five provider roles
-(keyword / SERP / web-fetch / community / LLM) run on bundled mock profiles.
-No paid API, no API keys, no network. Real providers are a Phase 2 swap behind
-the same interfaces (see `docs/MIGRATION.md`).
+Phase 1 MVP is **offline and deterministic** for article production: all five
+provider roles (keyword / SERP / web-fetch / community / LLM) run on bundled
+mock profiles — no paid API, no API keys. The only network touchpoint is
+onboarding (`onboard fetch` crawls the customer's own website over plain
+HTTP; `providers verify` pings the customer's own DataForSEO/Reddit
+credentials). Real provider roles are a Phase 2 swap behind the same
+interfaces (see `docs/MIGRATION.md`).
 
 ## Why this shape
 
@@ -51,8 +54,8 @@ uv run ruff check .
 Create a brand and run one article end to end:
 
 ```bash
-export SEO_WRITER_DATA=~/.seo-writer          # optional; default is ~/.seo-writer
-alias sw="uv run seo-writer --data-dir $SEO_WRITER_DATA"
+export SEO_WRITER_DATA_DIR=~/.seo-writer     # optional; default is ~/.seo-writer
+alias sw="uv run seo-writer --data-dir $SEO_WRITER_DATA_DIR"
 
 sw init
 sw brand create acme
@@ -103,9 +106,43 @@ seo-writer run status <run-id>
 seo-writer run evidence <run-id> [--json]
 seo-writer run costs <run-id>
 seo-writer run retry <run-id> --step research|outline|draft
+seo-writer onboard site <brand> --url https://…
+seo-writer onboard fetch <brand>
+seo-writer onboard confirm <brand> --approver NAME
+seo-writer onboard status <brand>
+seo-writer providers configure [--name dataforseo|reddit]
+seo-writer providers verify [--name dataforseo|reddit]
+seo-writer providers status
 ```
 
 Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
+
+## Onboarding a new brand
+
+New-brand setup is a four-step journey; a ready-made agent wrapper lives in
+`skills/seo-writer-onboarding/`:
+
+1. **`onboard site <brand> --url https://…`** — record the customer's website
+   as local brand memory (`brands/<slug>/site.yaml`). Interactive prompt when
+   `--url` is omitted.
+2. **`onboard fetch <brand>`** — crawl the site over plain HTTP (no key, no
+   LLM), keep `index.html` + `content.txt` + `seo-audit.yaml` under
+   `brands/<slug>/site-crawl/`, and run a baseline SEO audit (title / meta
+   description / H1 / image alt / canonical / robots / JSON-LD / size / speed,
+   scored 0–100).
+3. **`onboard confirm <brand>`** — an agent (or you) writes the product's
+   feature summary to `brands/<slug>/site.md` from the crawled text; the
+   customer reviews and edits it; `confirm` stamps who approved and when.
+4. **`providers configure`** — interactive DataForSEO (login/password) and
+   Reddit (client_id/client_secret) setup. Secrets go to a chmod-600
+   `.secrets.yaml` in the data dir — never in git, never echoed — and every
+   provider is verified live on configure (DataForSEO ping, Reddit OAuth).
+   Env defaults are offered (DATAFORSEO_LOGIN/PASSWORD, REDDIT_CLIENT_ID/
+   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`.
+
+The confirmed feature summary seeds `facts.yaml` for the production pipeline.
+Configured-but-unverified credentials block nothing yet — the real
+search/community providers are a Phase 2 swap.
 
 ## Agent workflow — no LLM API needed
 
@@ -196,17 +233,21 @@ src/seo_writer/
   facts.py               # facts import + snapshot hashing + approval invalidation
   policy.py              # policy import + validation against Skill floors
   ids.py                 # run ids, sha256, idempotency keys
+  onboard.py             # onboarding: site memory, crawl + SEO audit, provider config
   validators/            # research_gate, claim_safety (pure, unit-testable)
   providers/             # ProviderResult + mock keyword/serp/webfetch/community/llm
 docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
+skills/                  # seo-writer (production) + seo-writer-onboarding (brand setup)
 examples/brand-packs/    # generic-anonymous example pack (no customer facts)
 tests/                   # AC1–AC10 + validator units, fixture-driven mocks
 ```
 
 ## Roadmap
 
-- **Phase 1 (current)** — fully offline: deterministic mock providers,
-  complete pipeline, audit/approval/claim-safety machinery, 45 tests.
+- **Phase 1 (current)** — offline deterministic production pipeline
+  (mock providers, audit/approval/claim-safety machinery, 75 tests) plus
+  onboarding: site memory, website crawl + baseline SEO audit, confirmed
+  feature summary, provider credential setup with live verification.
 - **Phase 2 — bring your own data sources.** The 5 provider roles get real
   implementations (DataForSEO, SERP APIs, Reddit, OpenRouter/LLM) that *you*
   configure with *your* keys via `policy.yaml` + environment variables. The
