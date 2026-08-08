@@ -1,5 +1,7 @@
 # seo-writer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 Local-first, research-gated, claim-safe SEO content production CLI.
 
 An opinionated pipeline that takes a topic brief through **research → gate →
@@ -172,6 +174,19 @@ docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
 examples/brand-packs/    # generic-anonymous example pack (no customer facts)
 tests/                   # AC1–AC10 + validator units, fixture-driven mocks
 ```
+
+## Roadmap
+
+- **Phase 1 (current)** — fully offline: deterministic mock providers,
+  complete pipeline, audit/approval/claim-safety machinery, 45 tests.
+- **Phase 2 — bring your own data sources.** The 5 provider roles get real
+  implementations (DataForSEO, SERP APIs, Reddit, OpenRouter/LLM) that *you*
+  configure with *your* keys via `policy.yaml` + environment variables. The
+  mocks remain the compatibility contract for tests. See
+  `docs/MIGRATION.md` for the per-role checklist.
+- **Phase 3 — commercial packaging** (license, usage metering) only when
+  there is a user base to justify it. The codebase is built so a hosted
+  gateway can be added without changing the CLI contract.
 
 ## Security posture (Phase 1)
 
