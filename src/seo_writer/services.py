@@ -14,6 +14,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+import yaml as _yaml
+
 from . import RULES_VERSION
 from . import state_machine as sm
 from .config import Workspace, load_yaml_model
@@ -523,7 +525,17 @@ def run_outline(
     policy: PolicyYaml,
     providers: dict | None = None,
     key: str | None = None,
+    from_file: str | None = None,
 ) -> dict:
+    """Generate (or import) an outline revision.
+
+    ``from_file`` imports outline markdown produced *externally* (e.g. by an
+    agent calling this CLI): no LLM provider is invoked, and the audit event
+    is marked ``origin: external``. The same structure validation, revision
+    counter and approval invalidation apply as for provider-generated
+    outlines. Imported content is a legitimate outline change: a fresh file
+    creates a new revision and supersedes the previous approval (AC6).
+    """
     _resume_allowed(run, "outline")
     if run["status"] not in {sm.GATE_PASSED, sm.OUTLINE_PENDING, sm.APPROVED, sm.DRAFTING, sm.COMPLETED}:
         if run["status"] == sm.BLOCKED:
@@ -535,32 +547,41 @@ def run_outline(
             "research gate must pass before an outline can be generated (`run validate-research`)"
         )
     run_id = run["id"]
-    key = key or idempotency_key(run_id, "outline")
-    prior = db.get_command_result(run_id, "outline", key)
-    if prior is not None:
-        return prior
-    providers = providers or build_providers(policy)
-    llm = llm_provider(providers)
-    brief = json.loads(run["brief_snapshot"])
-    facts = load_facts(db, brand["id"])
-    claims = facts.get("rules", [])
-    evidence = db.list_evidence(run_id)
-    try:
-        result = _call(
-            db,
-            run_id,
-            policy,
-            "llm",
-            key,
-            llm.name,
-            llm.profile,
-            "llm.outline",
-            lambda: llm.generate_outline(brief, evidence, claims),
-        )
-    except (PermanentProviderError, TransientProviderError) as exc:
-        _fail_blocked(db, run, "outline", f"{exc} (retryable={exc.retryable})")
-        raise
-    content = result.data["markdown"]
+    if from_file:
+        key = key or idempotency_key(run_id, "outline", {"external": _file_digest(from_file)})
+        prior = db.get_command_result(run_id, "outline", key)
+        if prior is not None:
+            return prior
+        content = _read_external(from_file, "outline")
+        llm_calls = 0
+    else:
+        key = key or idempotency_key(run_id, "outline")
+        prior = db.get_command_result(run_id, "outline", key)
+        if prior is not None:
+            return prior
+        providers = providers or build_providers(policy)
+        llm = llm_provider(providers)
+        brief = json.loads(run["brief_snapshot"])
+        facts = load_facts(db, brand["id"])
+        claims = facts.get("rules", [])
+        evidence = db.list_evidence(run_id)
+        try:
+            result = _call(
+                db,
+                run_id,
+                policy,
+                "llm",
+                key,
+                llm.name,
+                llm.profile,
+                "llm.outline",
+                lambda: llm.generate_outline(brief, evidence, claims),
+            )
+        except (PermanentProviderError, TransientProviderError) as exc:
+            _fail_blocked(db, run, "outline", f"{exc} (retryable={exc.retryable})")
+            raise
+        content = result.data["markdown"]
+        llm_calls = llm.call_count
     structure_errors = validate_outline_structure(content)
     if structure_errors:
         _fail_blocked(db, run, "outline", "; ".join(structure_errors))
@@ -571,12 +592,15 @@ def run_outline(
     db.set_outline_revision(run_id, revision)
     db.set_approved_revision(run_id, None)
     db.set_status(run_id, sm.OUTLINE_PENDING, step="outline", failure_reason=None)
-    db.add_audit(run_id, "outline.generated", {"revision": revision, "rules_version": RULES_VERSION})
+    origin = {"origin": "external"} if from_file else {}
+    db.add_audit(
+        run_id, "outline.generated", {"revision": revision, "rules_version": RULES_VERSION, **origin}
+    )
     out = {
         "run_id": run_id,
         "status": sm.OUTLINE_PENDING,
         "outline_revision": revision,
-        "llm_calls": llm.call_count,
+        "llm_calls": llm_calls,
     }
     db.record_command(run_id, "outline", key, out)
     return out
@@ -653,45 +677,65 @@ def run_draft(
     policy: PolicyYaml,
     providers: dict | None = None,
     key: str | None = None,
+    from_file: str | None = None,
 ) -> dict:
+    """Generate (or import) the article draft.
+
+    ``from_file`` imports draft markdown produced *externally* (agent-authored
+    copy): no LLM provider is invoked and the audit event is marked
+    ``origin: external``. The approval guard runs identically — an
+    unapproved or stale approval refuses before anything else, with zero
+    provider calls on the refused path (AC4).
+    """
     _resume_allowed(run, "draft")
     run_id = run["id"]
     approval = current_approval(db, run, brand)  # raises before any LLM call
-    key = key or idempotency_key(run_id, "draft")
-    prior = db.get_command_result(run_id, "draft", key)
-    if prior is not None:
-        return prior
-    providers = providers or build_providers(policy)
-    llm = llm_provider(providers)
-    outline = db.get_outline(run_id, run["approved_revision"])
-    facts = load_facts(db, brand["id"])
-    try:
-        result = _call(
-            db,
-            run_id,
-            policy,
-            "llm",
-            key,
-            llm.name,
-            llm.profile,
-            "llm.draft",
-            lambda: llm.generate_draft(outline["content"], facts.get("rules", [])),
-        )
-    except (PermanentProviderError, TransientProviderError) as exc:
-        _fail_blocked(db, run, "draft", f"{exc} (retryable={exc.retryable})")
-        raise
-    db.save_draft(run_id, run["approved_revision"], result.data["markdown"], {})
+    if from_file:
+        key = key or idempotency_key(run_id, "draft", {"external": _file_digest(from_file)})
+        prior = db.get_command_result(run_id, "draft", key)
+        if prior is not None:
+            return prior
+        content = _read_external(from_file, "draft")
+        llm_calls = 0
+    else:
+        key = key or idempotency_key(run_id, "draft")
+        prior = db.get_command_result(run_id, "draft", key)
+        if prior is not None:
+            return prior
+        providers = providers or build_providers(policy)
+        llm = llm_provider(providers)
+        outline = db.get_outline(run_id, run["approved_revision"])
+        facts = load_facts(db, brand["id"])
+        try:
+            result = _call(
+                db,
+                run_id,
+                policy,
+                "llm",
+                key,
+                llm.name,
+                llm.profile,
+                "llm.draft",
+                lambda: llm.generate_draft(outline["content"], facts.get("rules", [])),
+            )
+        except (PermanentProviderError, TransientProviderError) as exc:
+            _fail_blocked(db, run, "draft", f"{exc} (retryable={exc.retryable})")
+            raise
+        content = result.data["markdown"]
+        llm_calls = llm.call_count
+    db.save_draft(run_id, run["approved_revision"], content, {})
     db.set_status(run_id, sm.DRAFTING, step="draft", failure_reason=None)
+    origin = {"origin": "external"} if from_file else {}
     db.add_audit(
         run_id,
         "draft.generated",
-        {"outline_revision": run["approved_revision"], "approval_id": approval["id"]},
+        {"outline_revision": run["approved_revision"], "approval_id": approval["id"], **origin},
     )
     out = {
         "run_id": run_id,
         "status": sm.DRAFTING,
         "outline_revision": run["approved_revision"],
-        "llm_calls": llm.call_count,
+        "llm_calls": llm_calls,
     }
     db.record_command(run_id, "draft", key, out)
     return out
@@ -704,45 +748,63 @@ def run_metadata(
     policy: PolicyYaml,
     providers: dict | None = None,
     key: str | None = None,
+    from_file: str | None = None,
 ) -> dict:
+    """Generate (or import) SEO metadata.
+
+    ``from_file`` imports a YAML metadata document produced *externally*:
+    no LLM provider is invoked, the same length/slug validation applies,
+    and the audit event is marked ``origin: external``.
+    """
     _resume_allowed(run, "metadata")
     run_id = run["id"]
     current_approval(db, run, brand)  # approval guard, like run_draft
     draft = db.get_draft(run_id)
     if draft is None:
         raise NotFoundError("no draft yet; run `seo-writer run draft` first")
-    key = key or idempotency_key(run_id, "metadata")
-    prior = db.get_command_result(run_id, "metadata", key)
-    if prior is not None:
-        return prior
-    providers = providers or build_providers(policy)
-    llm = llm_provider(providers)
-    outline = db.get_outline(run_id, run["approved_revision"])
-    paa_pool: list[str] = []
-    for ev in db.list_evidence(run_id):
-        paa_pool += ev.get("details", {}).get("paa", [])
-    try:
-        result = _call(
-            db,
-            run_id,
-            policy,
-            "llm",
-            key,
-            llm.name,
-            llm.profile,
-            "llm.metadata",
-            lambda: llm.generate_metadata(outline["content"], draft["article"], paa_pool),
-        )
-    except (PermanentProviderError, TransientProviderError) as exc:
-        _fail_blocked(db, run, "metadata", f"{exc} (retryable={exc.retryable})")
-        raise
-    meta_errors = validate_metadata_lengths(result.data)
+    if from_file:
+        key = key or idempotency_key(run_id, "metadata", {"external": _file_digest(from_file)})
+        prior = db.get_command_result(run_id, "metadata", key)
+        if prior is not None:
+            return prior
+        data = _read_external_yaml(from_file, "metadata")
+        llm_calls = 0
+    else:
+        key = key or idempotency_key(run_id, "metadata")
+        prior = db.get_command_result(run_id, "metadata", key)
+        if prior is not None:
+            return prior
+        providers = providers or build_providers(policy)
+        llm = llm_provider(providers)
+        outline = db.get_outline(run_id, run["approved_revision"])
+        paa_pool: list[str] = []
+        for ev in db.list_evidence(run_id):
+            paa_pool += ev.get("details", {}).get("paa", [])
+        try:
+            result = _call(
+                db,
+                run_id,
+                policy,
+                "llm",
+                key,
+                llm.name,
+                llm.profile,
+                "llm.metadata",
+                lambda: llm.generate_metadata(outline["content"], draft["article"], paa_pool),
+            )
+        except (PermanentProviderError, TransientProviderError) as exc:
+            _fail_blocked(db, run, "metadata", f"{exc} (retryable={exc.retryable})")
+            raise
+        data = result.data
+        llm_calls = llm.call_count
+    meta_errors = validate_metadata_lengths(data)
     if meta_errors:
         _fail_blocked(db, run, "metadata", "; ".join(meta_errors))
         raise ValidationFailedError(meta_errors, step="metadata")
-    db.save_draft(run_id, run["approved_revision"], draft["article"], result.data)
-    db.add_audit(run_id, "metadata.generated", {"outline_revision": run["approved_revision"]})
-    out = {"run_id": run_id, "status": run["status"], "metadata": result.data, "llm_calls": llm.call_count}
+    db.save_draft(run_id, run["approved_revision"], draft["article"], data)
+    origin = {"origin": "external"} if from_file else {}
+    db.add_audit(run_id, "metadata.generated", {"outline_revision": run["approved_revision"], **origin})
+    out = {"run_id": run_id, "status": run["status"], "metadata": data, "llm_calls": llm_calls}
     db.record_command(run_id, "metadata", key, out)
     return out
 
@@ -908,6 +970,29 @@ def run_export(
     }
     db.record_command(run_id, "export", key, out)
     return out
+
+
+def _file_digest(path: str) -> str:
+    """sha256 of the file's bytes — the idempotency input for external imports."""
+    return sha256_text(Path(path).expanduser().read_bytes().decode("utf-8"))
+
+
+def _read_external(path: str, what: str) -> str:
+    content = Path(path).expanduser().read_text(encoding="utf-8")
+    if not content.strip():
+        raise SeoWriterError(f"external {what} file is empty: {path}")
+    return content
+
+
+def _read_external_yaml(path: str, what: str) -> dict[str, Any]:
+    content = _read_external(path, what)
+    try:
+        data = _yaml.safe_load(content)
+    except _yaml.YAMLError as exc:
+        raise UsageError(f"external {what} file is not valid YAML: {path} ({exc})") from exc
+    if not isinstance(data, dict):
+        raise UsageError(f"external {what} file must contain a YAML mapping: {path}")
+    return data
 
 
 def _copy_export_to(article_path: str, manifest_path: str, out_dir: str) -> None:

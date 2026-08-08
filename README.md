@@ -93,10 +93,10 @@ seo-writer run create <brand> <project> --brief <topic.yaml>
 seo-writer run list <brand> [--project <slug>]
 seo-writer run research <run-id>
 seo-writer run validate-research <run-id>
-seo-writer run outline <run-id>
+seo-writer run outline <run-id> [--from-file outline.md]
 seo-writer run approve <run-id> --revision N --approver NAME
-seo-writer run draft <run-id>
-seo-writer run metadata <run-id>
+seo-writer run draft <run-id> [--from-file draft.md]
+seo-writer run metadata <run-id> [--from-file metadata.yaml]
 seo-writer run validate <run-id>
 seo-writer run export <run-id> --format markdown [--out-dir DIR]
 seo-writer run status <run-id>
@@ -106,6 +106,34 @@ seo-writer run retry <run-id> --step research|outline|draft
 ```
 
 Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
+
+## Agent workflow — no LLM API needed
+
+The CLI can run the whole pipeline with **you (or an agent) as the writer**:
+outline, draft and metadata are authored as files and imported with
+`--from-file`. The CLI skips its LLM provider entirely (zero calls, audit
+events marked `origin: external`) while enforcing everything else — gate,
+approval, claim safety, idempotency, revisioning.
+
+```bash
+seo-writer run research <run-id>
+seo-writer run validate-research <run-id>        # gate must pass
+# 1. write outline.md yourself (structure validated on import)
+seo-writer run outline <run-id> --from-file outline.md
+seo-writer run approve <run-id> --revision 1 --approver "editor@example.com"
+# 2. write draft.md yourself (approved claim wording only)
+seo-writer run draft <run-id> --from-file draft.md
+# 3. write metadata.yaml yourself (title ≤60 / desc ≤155 / alt ≤125)
+seo-writer run metadata <run-id> --from-file metadata.yaml
+seo-writer run validate <run-id>                 # agent-authored copy is validated too
+seo-writer run export <run-id> --format markdown
+```
+
+A ready-made agent wrapper lives in `skills/seo-writer/` (SKILL.md + content
+templates): it spells out the content requirements, the claim rules and the
+failure-handling table. Importing the same file twice is idempotent; editing
+the file and re-importing creates a new outline revision and invalidates the
+previous approval (re-approve).
 
 ## Data model
 

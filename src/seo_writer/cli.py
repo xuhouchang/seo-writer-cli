@@ -365,16 +365,23 @@ def run_validate_research(
 @run_app.command("outline")
 def run_outline(
     run_id: Annotated[str, typer.Argument(help="Run id")],
+    from_file: Annotated[
+        str | None,
+        typer.Option(
+            "--from-file",
+            help="Import outline markdown produced externally (no LLM call); audit is marked origin=external",
+        ),
+    ] = None,
     idempotency_key: Annotated[
         str | None, typer.Option(help="Deterministic key (defaults to run:{id}:outline)")
     ] = None,
 ) -> None:
-    """Generate the outline (LLM provider); requires the gate to have passed."""
+    """Generate the outline (LLM provider) or import one (--from-file); the gate must have passed."""
 
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_outline(db, run, brand, policy, key=idempotency_key)
+        return services.run_outline(db, run, brand, policy, key=idempotency_key, from_file=from_file)
 
     return _guard(run)
 
@@ -400,16 +407,23 @@ def run_approve(
 @run_app.command("draft")
 def run_draft(
     run_id: Annotated[str, typer.Argument(help="Run id")],
+    from_file: Annotated[
+        str | None,
+        typer.Option(
+            "--from-file",
+            help="Import draft markdown produced externally (no LLM call); audit is marked origin=external",
+        ),
+    ] = None,
     idempotency_key: Annotated[
         str | None, typer.Option(help="Deterministic key (defaults to run:{id}:draft)")
     ] = None,
 ) -> None:
-    """Generate the draft (LLM provider); requires an explicit, current approval."""
+    """Generate the draft (LLM provider) or import one (--from-file); requires a current approval."""
 
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_draft(db, run, brand, policy, key=idempotency_key)
+        return services.run_draft(db, run, brand, policy, key=idempotency_key, from_file=from_file)
 
     return _guard(run)
 
@@ -417,16 +431,24 @@ def run_draft(
 @run_app.command("metadata")
 def run_metadata(
     run_id: Annotated[str, typer.Argument(help="Run id")],
+    from_file: Annotated[
+        str | None,
+        typer.Option(
+            "--from-file",
+            help="Import a YAML metadata document produced externally (no LLM call); "
+            "audit is marked origin=external",
+        ),
+    ] = None,
     idempotency_key: Annotated[
         str | None, typer.Option(help="Deterministic key (defaults to run:{id}:metadata)")
     ] = None,
 ) -> None:
-    """Generate SEO metadata (LLM provider); length validation blocks on failure."""
+    """Generate SEO metadata (LLM provider) or import it (--from-file); length checks block."""
 
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_metadata(db, run, brand, policy, key=idempotency_key)
+        return services.run_metadata(db, run, brand, policy, key=idempotency_key, from_file=from_file)
 
     return _guard(run)
 

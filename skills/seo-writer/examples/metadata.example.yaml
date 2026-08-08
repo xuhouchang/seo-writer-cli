@@ -1,0 +1,16 @@
+# seo-writer metadata document for `run metadata --from-file`.
+# Enforced caps: meta_title <= 60, meta_description <= 155,
+# image_alt_texts entries <= 125, slug lowercase with dashes.
+meta_title: "Editing Workflow Decisions: A Practical Guide"
+meta_description: "A practical guide to choosing an editing workflow, with decision logic and honest not-a-fit boundaries."
+slug: editing-workflow-decisions
+faq:
+  - q: "Which workflow fits my footage?"
+    a: "Classify each segment by failure mode, then apply the decision sequence from the article."
+  - q: "When does the automated approach need review?"
+    a: "Every automated pass needs a review step before output is treated as final."
+internal_links:
+  - title: "Editorial operations guide"
+    anchor: "review workflow"
+image_alt_texts:
+  - "Workflow decision table comparing manual and automated passes"
