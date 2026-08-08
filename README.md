@@ -127,9 +127,21 @@ New-brand setup is a four-step journey; a ready-made agent wrapper lives in
    `--url` is omitted.
 2. **`onboard fetch <brand>`** — crawl the site over plain HTTP (no key, no
    LLM), keep `index.html` + `content.txt` + `seo-audit.yaml` under
-   `brands/<slug>/site-crawl/`, and run a baseline SEO audit (title / meta
-   description / H1 / image alt / canonical / robots / JSON-LD / size / speed,
-   scored 0–100).
+   `brands/<slug>/site-crawl/`, and run a category-scoped SEO audit scored
+   0–100. The rule set is a Python re-implementation of the static-checkable
+   subset of the MIT-licensed
+   [seo-skills/seo-audit-skill](https://github.com/seo-skills/seo-audit-skill)
+   (251 rules / 20 categories upstream; ~100 rules embedded here — see
+   `src/seo_writer/seo_rules.py` and `NOTICE`): core / htmlval / social /
+   content / a11y / images / url / mobile / i18n / security / technical /
+   crawl / redirect / schema / eeat / geo / legal / perf, plus robots.txt +
+   sitemap.xml checks fetched alongside the page (absence tolerated, reported
+   as findings). Each rule is
+   a pure standard-library check — no third-party runtime dependencies — with
+   `pass(100)/warn(50)/fail(0)` semantics mapped to
+   `ok(-0)/info(-2)/warning(-10)/error(-30)` and
+   `score = max(0, 100 − errors×30 − warnings×10 − infos×2)`. Every
+   `seo-audit.yaml` carries a `rubric` field naming the upstream source.
 3. **`onboard confirm <brand>`** — an agent (or you) writes the product's
    feature summary to `brands/<slug>/site.md` from the crawled text; the
    customer reviews and edits it; `confirm` stamps who approved and when.
@@ -234,6 +246,7 @@ src/seo_writer/
   policy.py              # policy import + validation against Skill floors
   ids.py                 # run ids, sha256, idempotency keys
   onboard.py             # onboarding: site memory, crawl + SEO audit, provider config
+  seo_rules.py           # SEO audit rules (~100, seo-audit-skill MIT subset; see NOTICE)
   validators/            # research_gate, claim_safety (pure, unit-testable)
   providers/             # ProviderResult + mock keyword/serp/webfetch/community/llm
 docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
