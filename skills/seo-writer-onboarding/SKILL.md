@@ -92,6 +92,41 @@ Rules:
 - Configured-but-unverified credentials still block nothing today: the real
   search/community providers are a Phase 2 swap behind the same interfaces.
 
+## Step 5 — connect Google Search Console (GSC)
+
+Performance data is pulled from the customer's GSC property into the local
+data dir (zero third-party runtime deps, stdlib only — nothing leaves the
+customer machine). Three paths, A → B → C:
+
+1. **`gsc setup <brand>`** — shows credential state and which path to take.
+   - **Path A (preferred)** — gcloud ADC already on the machine:
+     `gcloud auth application-default login` then `gsc auth <brand> --gcloud`.
+   - **Path B** — customer's own OAuth client: they download
+     `client_secret_*.json` from their Google Cloud console
+     (Desktop app type; enable the Search Console API). `gsc setup` imports
+     it (chmod-600, copied into the data dir), then `gsc auth <brand>` opens
+     the PKCE consent flow (or `--no-launch-browser` to paste the URL and
+     code manually).
+   - **Path C** — no credentials at all: the customer exports
+     "Search results" CSV from the GSC UI, `gsc import <brand> <file.csv>`.
+2. **`gsc sites <brand>`** — list properties the account can access.
+3. **`gsc connect <brand> --property <url>`** — bind the property to the
+   brand (e.g. `sc-domain:example.com` or `https://example.com/`).
+4. **`gsc pull <brand>`** — Search Analytics, incremental: repeated runs
+   skip synced dates and make **zero** API calls (`--force` to re-pull).
+   Handles 429/5xx with exponential backoff and the 1,200 QPM limit.
+5. **`gsc insights <brand>`** — high-impressions/low-CTR queries, rising
+   queries, and URL performance against the `onboard fetch` audit baseline
+   — feeds the customer-facing report.
+6. Optional extras: `gsc inspect --brand <brand> --url <url>` (indexing
+   status, uses the bound property), `gsc sitemap submit` (submit/refresh
+   sitemaps).
+
+Credentials (refresh token, client json) live only under
+`<data-dir>/.../gsc/<brand>/`, chmod-600; `gsc status` shows binding and sync
+ranges without printing any secret. If the customer has no credentials at
+all, path C still gives insights from their UI export.
+
 ## Failure handling
 
 | symptom | cause | fix |

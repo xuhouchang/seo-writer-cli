@@ -113,7 +113,32 @@ seo-writer onboard status <brand>
 seo-writer providers configure [--name dataforseo|reddit]
 seo-writer providers verify [--name dataforseo|reddit]
 seo-writer providers status
+seo-writer gsc setup <brand>                          # credential state + guidance
+seo-writer gsc auth <brand> [--no-launch-browser] [--gcloud]
+seo-writer gsc sites <brand>
+seo-writer gsc connect <brand> --property <url>       # bind property to brand
+seo-writer gsc pull <brand> [--days 30] [--force]     # incremental, idempotent
+seo-writer gsc inspect --brand <brand> --url <url>  # uses the bound property
+seo-writer gsc sitemap submit <brand> --property <url> --path <path>
+seo-writer gsc import <brand> <gsc.csv> [--date YYYY-MM-DD]  # GSC UI export
+seo-writer gsc insights <brand> [--window 28]
+seo-writer --json gsc status --brand <brand>   # --json is a global flag
 ```
+
+GSC integration overview (zero third-party runtime deps, stdlib only):
+
+- **`setup`** — three auth paths: A. gcloud ADC (preferred), B. own OAuth
+  client json (`import` via `setup` prompt, PKCE loopback flow via `auth`),
+  C. GSC UI CSV export fallback via `import`.
+- **`pull`** — Search Analytics (date+query / date+page dimensions),
+  25,000-row startRow pagination, incremental upsert skipping synced dates
+  (repeat runs make **zero** API calls; `--force` re-pulls), 429/5xx
+  exponential backoff (1s→60s + jitter) and a 1,200 QPM rate limiter.
+- **`insights`** — high-impressions/low-CTR queries, rising queries,
+  URL performance vs the `onboard fetch` audit baseline.
+- Credentials and GSC data stay on the customer machine
+  (`--data-dir/.../gsc/<brand>/`, token files chmod-600); nothing is sent to
+  third parties. See `docs/SEO-WRITER-GSC-PLAN.md` for the full design.
 
 Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
 

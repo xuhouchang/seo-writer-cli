@@ -22,7 +22,7 @@ from typing import Annotated, Any
 
 import typer
 
-from . import RULES_VERSION, __version__, onboard, services
+from . import RULES_VERSION, __version__, gsc, onboard, services
 from .config import Workspace, ensure_workspace, load_yaml_model, resolve_data_dir, resolve_workspace
 from .db import Database
 from .errors import ProviderError, SeoWriterError, UsageError, ValidationFailedError
@@ -40,6 +40,8 @@ onboard_app = typer.Typer(help="New-brand onboarding (site memory, crawl, audit,
     no_args_is_help=True,)
 providers_app = typer.Typer(help="Provider credential configuration (DataForSEO, Reddit).",
     no_args_is_help=True,)
+gsc_app = typer.Typer(help="Google Search Console closed loop (measure → iterate).", no_args_is_help=True)
+sitemap_app = typer.Typer(help="Sitemap management.", no_args_is_help=True)
 
 app.add_typer(brand_app, name="brand")
 brand_app.add_typer(brand_facts_app, name="facts")
@@ -48,6 +50,8 @@ app.add_typer(project_app, name="project")
 app.add_typer(run_app, name="run")
 app.add_typer(onboard_app, name="onboard")
 app.add_typer(providers_app, name="providers")
+gsc_app.add_typer(sitemap_app, name="sitemap")
+app.add_typer(gsc_app, name="gsc")
 
 
 class Ctx:
@@ -95,6 +99,8 @@ def _guard(fn: Callable[[], Any]) -> Any:
                 payload.update({"step": exc.step, "reasons": exc.reasons})
             if isinstance(exc, ProviderError):
                 payload.update({"provider": exc.provider, "retryable": exc.retryable})
+            if isinstance(exc, gsc.GscError):
+                payload.update({"retryable": exc.retryable})
             print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         else:
             print(f"error: {exc}", file=sys.stderr)
@@ -689,5 +695,187 @@ def run_retry(
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
         return services.run_retry(db, run, brand, step, policy)
+
+    return _guard(run)
+
+
+# ---------------------------------------------------------------------------
+# gsc (Google Search Console closed loop)
+# ---------------------------------------------------------------------------
+
+
+def _gsc_prompt(message: str) -> str:
+    """Interactive prompt; refused under --json (the CLI stays scriptable)."""
+    if state.json:
+        raise UsageError("interactive setup needs a terminal; drop --json or pass the required options")
+    return typer.prompt(message)
+
+
+@gsc_app.command("setup")
+def gsc_setup(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    client_json: Annotated[
+        str | None, typer.Option(help="Path to a Desktop-app client json (path B)")
+    ] = None,
+) -> None:
+    """Detect the auth path and guide setup: gcloud ADC (path A) or own client (path B)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.setup_guide(
+            db, ws, brand, client_json=client_json, interactive=not state.json, prompt=_gsc_prompt
+        )
+
+    return _guard(run)
+
+
+@gsc_app.command("auth")
+def gsc_auth(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    no_launch_browser: Annotated[bool, typer.Option(help="Print the URL and paste the code back")] = False,
+) -> None:
+    """One-time browser authorization (path A: gcloud login; path B: PKCE desktop flow)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.run_auth(
+            db, ws, brand, no_launch_browser=no_launch_browser, prompt=_gsc_prompt if not state.json else None
+        )
+
+    return _guard(run)
+
+
+@gsc_app.command("sites")
+def gsc_sites(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+) -> None:
+    """List the GSC properties the authorized account can see."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        creds, _ = gsc.load_credentials(db, ws, brand)
+        return gsc.list_sites(creds)
+
+    return _guard(run)
+
+
+@gsc_app.command("connect")
+def gsc_connect(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    property: Annotated[
+        str, typer.Option(help="Property URL, e.g. https://www.example.com/ or sc-domain:example.com")
+    ],
+) -> None:
+    """Bind a GSC property to the brand (verified against the account's sites)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.connect_property(db, ws, brand, property)
+
+    return _guard(run)
+
+
+@gsc_app.command("pull")
+def gsc_pull(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    start_date: Annotated[str | None, typer.Option(help="YYYY-MM-DD (default: 30 days back)")] = None,
+    end_date: Annotated[
+        str | None, typer.Option(help="YYYY-MM-DD (default: today minus 3d freshness)")
+    ] = None,
+    force: Annotated[bool, typer.Option(help="Re-pull dates already synced")] = False,
+) -> None:
+    """Pull (date,query) + (date,page) rows per day; idempotent, paginated, backoff-protected."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.pull_search_analytics(db, ws, brand, start_date=start_date, end_date=end_date, force=force)
+
+    return _guard(run)
+
+
+@gsc_app.command("inspect")
+def gsc_inspect(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    url: Annotated[str, typer.Option(help="URL to inspect")],
+) -> None:
+    """Check one URL's index coverage via URL Inspection."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.inspect_url(db, ws, brand, url)
+
+    return _guard(run)
+
+
+@sitemap_app.command("submit")
+def gsc_sitemap_submit(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    url: Annotated[str, typer.Option(help="Sitemap URL")],
+) -> None:
+    """Submit a sitemap to Google Search Console."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.submit_sitemap(db, ws, brand, url)
+
+    return _guard(run)
+
+
+@gsc_app.command("import")
+def gsc_import(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    csv_file: Annotated[
+        str, typer.Argument(help="GSC UI export CSV (Query/Page + metrics)")
+    ],
+    property: Annotated[
+        str | None, typer.Option(help="Property URL when the brand has no connected property")
+    ] = None,
+    date: Annotated[
+        str | None, typer.Option(help="Data date YYYY-MM-DD when the CSV has no Date column")
+    ] = None,
+) -> None:
+    """Import a GSC UI export CSV into gsc_queries (fallback path C, no credentials needed)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.import_gsc_csv(db, ws, brand, csv_file, property_url=property, data_date=date)
+
+    return _guard(run)
+
+
+@gsc_app.command("insights")
+def gsc_insights(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    window: Annotated[int, typer.Option(help="Look-back days (default 28)")] = 28,
+    url: Annotated[str | None, typer.Option(help="URL performance vs audit baseline")] = None,
+) -> None:
+    """Closed-loop reports: high impressions/low CTR, rising queries, URL performance."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.insights(db, ws, brand, window=window, url=url)
+
+    return _guard(run)
+
+
+@gsc_app.command("status")
+def gsc_status(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+) -> None:
+    """Show brand ↔ property binding, sync range and credential path state (no secrets)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.gsc_status(db, ws, brand)
 
     return _guard(run)
