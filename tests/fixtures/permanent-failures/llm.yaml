@@ -1,0 +1,6 @@
+# Permanent LLM failure during outline generation: must block immediately,
+# never silently retried, with no cost duplication.
+failures:
+  - op: outline
+    kind: permanent
+    times: 1

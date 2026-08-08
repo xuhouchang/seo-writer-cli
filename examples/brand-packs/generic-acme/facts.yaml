@@ -1,0 +1,42 @@
+# Generic claim ledger. Every substantive product claim in generated copy must
+# trace to an approved rule here; blocked claims must never reach draft output.
+# Replace with your customer's real facts before use.
+brand: acme
+facts_version: 1
+rules:
+  - claim_id: CLAIM-001
+    claim: "The review pass checks every segment before output ships"
+    safety_level: safe
+    allowed_wording: "the review pass checks every segment before output ships"
+    source_url: "https://example.com/docs/review-pass"
+    evidence_date: "2026-08-01"
+    evidence_mode: "documentation"
+    volatility: low
+    decision: approved
+  - claim_id: CLAIM-002
+    claim: "Acme saves every user four hours per video"
+    safety_level: blocked
+    disallowed_wording:
+      - "saves every user"
+      - "four hours"
+    reason: "unverified aggregate claim; no customer measurement exists"
+    decision: blocked
+  - claim_id: CLAIM-003
+    claim: "Operators report fewer re-edits when they apply the decision sequence"
+    safety_level: qualified
+    allowed_wording: "operators report fewer re-edits when they apply the decision sequence"
+    guardrail: "attribute to operator reports, not to the tool"
+    evidence_date: "2026-07-15"
+    evidence_mode: "customer interview"
+    decision: approved
+  - claim_id: CLAIM-004
+    claim: "Manual review remains the final step for brand-critical output"
+    safety_level: topic_specific
+    allowed_wording: "manual review remains the final step for brand-critical output"
+    source_url: "https://example.com/docs/review-step"
+    decision: approved
+material_terms:
+  - term: "four hours per video"
+    claim_id: CLAIM-002
+  - term: "saves every user"
+    claim_id: CLAIM-002

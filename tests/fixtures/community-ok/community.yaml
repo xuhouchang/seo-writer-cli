@@ -1,0 +1,10 @@
+# Happy-path community evidence (same defaults as the generic policy).
+candidate_threads: 12
+open_threads: 10
+second_platform_threads: 1
+subreddits:
+  - r/NewTubers
+  - r/YouTubeCreators
+  - r/ContentCreators
+  - r/VideoEditing
+document_second_platform_insufficiency: false

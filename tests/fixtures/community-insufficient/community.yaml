@@ -1,0 +1,9 @@
+# Gate-failure path: too few opened threads, too few subreddits, no second
+# platform and no documented insufficiency -> the research gate must fail.
+candidate_threads: 8
+open_threads: 4
+second_platform_threads: 0
+subreddits:
+  - r/NewTubers
+  - r/VideoEditing
+document_second_platform_insufficiency: false

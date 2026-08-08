@@ -1,0 +1,11 @@
+# One ArticleRun brief. Topics are per-project inputs; keep keywords honest
+# and audience-specific.
+slug: workflow-decisions
+title: "Editing Workflow Decisions: A Practical Guide"
+seed_keywords:
+  - editing workflow decisions
+intent: MOFU
+target_word_count: 1500
+audience: operators running small editorial teams
+existing_blog_urls: []
+notes: "Decision-logic angle; avoid feature-list recaps"

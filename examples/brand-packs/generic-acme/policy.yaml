@@ -1,0 +1,28 @@
+# Run policy: deterministic, offline-first. All five provider roles use the
+# deterministic mock profiles; no keys, no paid APIs. Real provider profiles
+# land in Phase 2 (see docs/MIGRATION.md).
+brand: acme
+providers:
+  keyword:
+    name: mock
+    profile: mock-default
+  serp:
+    name: mock
+    profile: mock-serp
+  webfetch:
+    name: mock
+    profile: mock-webfetch
+  community:
+    name: mock
+    profile: mock-community
+  llm:
+    name: mock
+    profile: mock-llm
+research_gate:
+  min_queries: 3
+  min_opened_serp_pages: 5
+  min_opened_threads: 10
+  min_subreddits: 4
+  require_second_platform: true
+retries: 2
+cost_limit_per_run: 5.0

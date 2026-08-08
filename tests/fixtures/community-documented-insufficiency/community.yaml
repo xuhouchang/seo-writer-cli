@@ -1,0 +1,11 @@
+# Second platform absent but the search outcome is documented as insufficient,
+# which the gate must accept as satisfying the second-platform requirement.
+candidate_threads: 12
+open_threads: 10
+second_platform_threads: 0
+subreddits:
+  - r/NewTubers
+  - r/YouTubeCreators
+  - r/ContentCreators
+  - r/VideoEditing
+document_second_platform_insufficiency: true

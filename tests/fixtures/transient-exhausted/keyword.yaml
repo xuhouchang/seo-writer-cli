@@ -1,0 +1,5 @@
+# search_volume fails transiently 3 times; policy retries=2 -> research blocks.
+failures:
+  - op: search_volume
+    kind: transient
+    times: 3

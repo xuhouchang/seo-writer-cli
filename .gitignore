@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+build/
+*.egg-info/
+.ruff_cache/
+.pytest_cache/
+.coverage
+# local workspaces and exports must never be committed
+data/
+workspace/
+*.sqlite
+*.sqlite3
+.env
+.env.*

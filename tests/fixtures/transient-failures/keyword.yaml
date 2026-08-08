@@ -1,0 +1,5 @@
+# search_volume fails transiently once, then succeeds (retryable per policy).
+failures:
+  - op: search_volume
+    kind: transient
+    times: 1

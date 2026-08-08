@@ -1,0 +1,3 @@
+# Draft injection that carries the brand's BLOCKED claim wording plus a
+# material term -> claim-safety validation must fail, never silently pass.
+draft_inject_text: "Acme saves every user four hours per video with no review step."

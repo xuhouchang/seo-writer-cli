@@ -1,0 +1,11 @@
+# Generic example brand — deliberately anonymous, no customer facts.
+# Copy this pack to your own directory and replace every value with your
+# customer's facts. Never commit real customer facts to this repo.
+slug: acme
+name: Acme Editorial Co.
+market: US
+language: en
+audience: operators running small editorial teams
+tone: analytical, practical
+competitors:
+  - "generic tool vendors"
