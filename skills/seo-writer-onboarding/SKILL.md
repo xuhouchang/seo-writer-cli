@@ -14,6 +14,21 @@ building blocks; you (the agent) do the extraction, the summarising and the
 customer-facing questions. Everything the CLI learns is stored locally under
 the brand's directory — nothing customer-specific ever ships in the repo.
 
+## CLI shell contract
+
+This Skill is an instruction shell around the local Python CLI; it is not a
+second implementation. Use explicit workspace configuration and JSON output:
+
+```bash
+export SW="seo-writer --data-dir ~/.seo-writer --workspace default --json"
+```
+
+Read successful business results from stdout, errors from stderr, and preserve
+the CLI exit-code contract: `0` success, `1` business/validation failure, `2`
+parameter or usage error. For tests, point `--data-dir` at a temporary
+directory and use only synthetic fixtures/local HTTP stubs. Do not run real
+OAuth or provider requests from the Skill test path.
+
 ## Workflow
 
 ```bash

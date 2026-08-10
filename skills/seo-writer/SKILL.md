@@ -33,6 +33,24 @@ approves, validates and exports your work.
    file short-circuits. Editing the file and re-importing creates a new
    outline revision and invalidates the previous approval — re-approve.
 
+## CLI shell contract
+
+This Skill is the product shell; the Python CLI is the execution runtime. Use an
+explicit data directory and request machine-readable output:
+
+```bash
+export SW="seo-writer --data-dir ~/.seo-writer --workspace default --json"
+```
+
+On success, consume JSON from stdout. On failure, inspect JSON on stderr and
+honour the exit code: `0` success, `1` business/validation failure, `2`
+parameter or usage error. Do not treat a non-zero exit code as a successful
+step, and do not duplicate the CLI's business logic in the Skill.
+
+For tests or demos, always replace `~/.seo-writer` with a temporary data
+directory. Never use real customer data, OAuth, provider credentials, paid
+requests, or model weights in fixtures.
+
 ## Prerequisites
 
 ```bash
