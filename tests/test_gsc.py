@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import inspect
 import json
 import os
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -29,6 +31,7 @@ import pytest
 
 from seo_writer import gsc
 from seo_writer.config import ensure_workspace
+from seo_writer.db import Database
 from seo_writer.errors import UsageError
 from tests.conftest import run_json_cli
 
@@ -81,7 +84,7 @@ class _GscStub(BaseHTTPRequestHandler):
     """Emulates oauth2 token/tokeninfo + Search Console v3/v1 endpoints."""
 
     token_status = 200
-    token_payload = {"access_token": "ya29.synthetic", "expires_in": 3600}
+    token_payload = {"access_token": "x", "expires_in": 3600}
     tokeninfo_payload = {"scope": SCOPE}
     sites_payload = {"siteEntry": [{"siteUrl": PROPERTY, "permissionLevel": "siteFullUser"}]}
     sa_total = 3
@@ -157,15 +160,6 @@ class _GscStub(BaseHTTPRequestHandler):
             self._record(body)
             self._send(404, {"error": {"message": f"stub: no POST route {path}"}})
 
-    def do_PUT(self) -> None:  # noqa: N802
-        length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(length) if length else None
-        self._record(body)
-        if "/sitemaps/" in self.path:
-            self._send(200, None)
-        else:
-            self._send(404, {"error": {"message": f"stub: no PUT route {self.path}"}})
-
     def log_message(self, *args: object) -> None:  # silence test noise
         pass
 
@@ -173,7 +167,7 @@ class _GscStub(BaseHTTPRequestHandler):
 @pytest.fixture
 def stub(monkeypatch):
     _GscStub.token_status = 200
-    _GscStub.token_payload = {"access_token": "ya29.synthetic", "expires_in": 3600}
+    _GscStub.token_payload = {"access_token": "x", "expires_in": 3600}
     _GscStub.tokeninfo_payload = {"scope": SCOPE}
     _GscStub.sites_payload = {"siteEntry": [{"siteUrl": PROPERTY, "permissionLevel": "siteFullUser"}]}
     _GscStub.sa_total = 3
@@ -276,7 +270,7 @@ def test_load_adc_corrupt_json(tmp_path):
 def test_refresh_access_token_success(stub):
     creds = gsc.Credentials(CLIENT_ID, CLIENT_SECRET, REFRESH_TOKEN, "gcloud-adc")
     token = gsc.refresh_access_token(creds, token_url=f"{stub.url}/token")
-    assert token == "ya29.synthetic"
+    assert token == "x"
     method, path, body = _GscStub.requests[-1]
     assert method == "POST" and path == "/token"
     assert body["grant_type"] == "refresh_token"
@@ -342,14 +336,23 @@ def test_refresh_access_token_without_refresh_token_is_permanent():
 
 
 def test_check_scope_has_webmasters(stub):
-    result = gsc.check_scope("ya29.synthetic", tokeninfo_url=f"{stub.url}/tokeninfo")
+    result = gsc.check_scope("x", tokeninfo_url=f"{stub.url}/tokeninfo")
+    assert result["has_readonly"] is True
     assert result["has_webmasters"] is True
     assert SCOPE in result["scopes"]
 
 
 def test_check_scope_missing_webmasters(stub):
     _GscStub.tokeninfo_payload = {"scope": "https://www.googleapis.com/auth/drive.readonly"}
-    result = gsc.check_scope("ya29.synthetic", tokeninfo_url=f"{stub.url}/tokeninfo")
+    result = gsc.check_scope("x", tokeninfo_url=f"{stub.url}/tokeninfo")
+    assert result["has_readonly"] is False
+    assert result["has_webmasters"] is False
+
+
+def test_check_scope_does_not_accept_unrelated_webmasters_scope(stub):
+    _GscStub.tokeninfo_payload = {"scope": "https://www.googleapis.com/auth/webmasters.foo"}
+    result = gsc.check_scope("x", tokeninfo_url=f"{stub.url}/tokeninfo")
+    assert result["has_readonly"] is False
     assert result["has_webmasters"] is False
 
 
@@ -421,6 +424,16 @@ def test_setup_no_credentials_offers_paths(ws, db, tmp_path):
     assert result["status"] == "no-credentials"
     assert [o["path"] for o in result["options"]] == ["A", "B"]
     assert "gcloud" in result["options"][0]["steps"][1]
+    assert result["options"][0]["title"] == "gcloud ADC（默认由交付人员协助完成一次 Google 授权）"
+    assert "never touches GCP" not in json.dumps(result)
+
+
+def test_readme_matches_gsc_pull_contract():
+    readme = Path(__file__).parents[1].joinpath("README.md").read_text(encoding="utf-8")
+    assert "[--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]" in readme
+    assert "--days" not in readme
+    assert "--date" not in readme
+    assert "SEO-WRITER-GSC-PLAN" not in readme
 
 
 def test_import_client_json_validates_and_chmods(ws, db, client_file):
@@ -559,6 +572,8 @@ def test_desktop_auth_loopback_mode(ws, db, client_file, stub):
 def test_gcloud_auth_success():
     def fake_run(cmd, capture_output, text, timeout):
         assert cmd[:4] == ["gcloud", "auth", "application-default", "login"]
+        assert cmd[5] == ",".join([gsc.CLOUD_PLATFORM_SCOPE, gsc.SCOPE])
+        assert capture_output is False
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     result = gsc.gcloud_auth(gcloud_bin="gcloud", run=fake_run)
@@ -668,6 +683,21 @@ def test_pull_basic(ws, db, connected, stub):
     assert db.gsc_pull_complete(PROPERTY, "date,page", "2026-07-02")
 
 
+def test_csv_import_pull_does_not_upgrade_status(ws, db, monkeypatch, stub, adc_file):
+    db.upsert_gsc_property("acme", PROPERTY, "csv-import", None, status="imported")
+
+    def load(_db, _ws, _brand) -> tuple[gsc.Credentials, dict | None]:
+        return gsc.load_adc(adc_file), _db.get_gsc_property(_brand)
+
+    monkeypatch.setattr(gsc, "load_credentials", load)
+    gsc.pull_search_analytics(db, ws, "acme", start_date="2026-07-01", end_date="2026-07-01")
+
+    assert db.get_gsc_property("acme")["status"] == "imported"
+    status = gsc.gsc_status(db, ws, "acme")
+    assert status["connected"] is False
+    assert status["source"] == "csv-import"
+
+
 def test_pull_is_idempotent_zero_api_calls(ws, db, connected, stub):
     gsc.pull_search_analytics(db, ws, "acme", start_date="2026-07-01", end_date="2026-07-02")
     requests_before = len(_GscStub.requests)
@@ -721,7 +751,7 @@ def test_pull_backs_off_on_quota_then_succeeds(ws, db, connected, stub):
     result = gsc.pull_search_analytics(
         db, ws, "acme", start_date="2026-07-01", end_date="2026-07-01", sleep=fake_sleep
     )
-    assert result["api_calls"] == 2
+    assert result["api_calls"] == 4  # two failed attempts + two successful calls
     assert len(sleeps) == 2  # two backoff sleeps for the 429s
     assert sleeps[0] < sleeps[1]  # exponential growth
     assert 0.5 <= sleeps[0] <= 1.5  # base ~1s with jitter
@@ -792,7 +822,7 @@ def test_with_backoff_exhausts_after_attempts():
 
 
 # ---------------------------------------------------------------------------
-# T5 — inspect + sitemap submit
+# T5 — inspect + read-only boundary
 # ---------------------------------------------------------------------------
 
 
@@ -811,17 +841,24 @@ def test_inspect_url_invalid(ws, db, connected):
         gsc.inspect_url(db, ws, "acme", "not-a-url")
 
 
-def test_submit_sitemap(ws, db, connected, stub):
-    result = gsc.submit_sitemap(db, ws, "acme", "https://www.example.com/sitemap.xml")
-    assert result["submitted"] is True
-    method, path, _ = _GscStub.requests[-1]
-    assert method == "PUT"
-    assert path.endswith("/sitemaps/https%3A%2F%2Fwww.example.com%2Fsitemap.xml")
+def test_gsc_has_no_sitemap_submit_command():
+    proc = subprocess.run(
+        [sys.executable, "-m", "seo_writer", "gsc", "--help"], capture_output=True, text=True
+    )
+    assert proc.returncode == 0
+    assert "sitemap" not in proc.stdout.lower()
 
 
-def test_submit_sitemap_invalid(ws, db, connected):
-    with pytest.raises(UsageError):
-        gsc.submit_sitemap(db, ws, "acme", "sitemap.xml")
+def test_gsc_code_has_no_sitemap_put():
+    assert not hasattr(gsc, "submit_sitemap")
+    assert "do_" + "PUT" not in Path(__file__).read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("args", [[], ["--help"]])
+def test_root_empty_command_and_help_exit_zero(args):
+    proc = subprocess.run([sys.executable, "-m", "seo_writer", *args], capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert "Usage" in proc.stdout
 
 
 # ---------------------------------------------------------------------------
@@ -847,14 +884,17 @@ def test_import_csv_with_bom_and_quotes(ws, db, tmp_path):
     assert abs(rows[0]["position"] - 7.5) < 1e-9
 
 
-def test_import_csv_with_date_option(ws, db, tmp_path):
-    csv_text = "Query,Page,Impressions,Clicks,CTR,Position\nfirst,https://www.example.com/a,100,1,1.0%,4.0\n"
+def test_import_csv_uses_each_row_date(ws, db, tmp_path):
+    csv_text = "Date,Query,Page,Impressions,Clicks,CTR,Position\n2026-07-02,first,https://www.example.com/a,100,1,1.0%,4.0\n"
     path = tmp_path / "export.csv"
     path.write_text(csv_text, encoding="utf-8-sig")
-    result = gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY, data_date="2026-07-02")
-    assert result["rows_imported"] == 1
-    rows = db.gsc_query_rows(PROPERTY, "2026-07-02", "2026-07-02")
-    assert len(rows) == 1 and rows[0]["query"] == "first"
+    result = gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    assert result["data_date"] == "from file"
+    assert db.gsc_query_rows(PROPERTY, "2026-07-02", "2026-07-02")[0]["data_date"] == "2026-07-02"
+
+
+def test_import_csv_has_no_library_date_override_parameter():
+    assert "data_date" not in inspect.signature(gsc.import_gsc_csv).parameters
 
 
 def test_import_csv_no_property(ws, db, tmp_path):
@@ -881,7 +921,112 @@ def test_import_csv_needs_date(ws, db, tmp_path):
     path.write_text(csv_text, encoding="utf-8-sig")
     with pytest.raises(UsageError) as exc:
         gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
-    assert "--date" in str(exc.value)
+    assert "Date" in str(exc.value)
+
+
+def test_csv_import_binds_property_as_offline_and_is_idempotent(ws, db, tmp_path):
+    path = tmp_path / "export.csv"
+    path.write_text(
+        "Date,Query,Impressions,Clicks,CTR,Position\n2026-07-01,first,100,1,1.0%,4.0\n",
+        encoding="utf-8-sig",
+    )
+    first = gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    second = gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    assert first["rows_imported"] == second["rows_imported"] == 1
+    assert db.get_gsc_property("acme")["status"] == "imported"
+    assert db.get_gsc_property("acme")["auth_path"] == "csv-import"
+    assert db._conn.execute("SELECT COUNT(*) FROM gsc_queries").fetchone()[0] == 1
+
+
+def test_csv_import_rejects_property_conflict_without_writing(ws, db, tmp_path):
+    path = tmp_path / "export.csv"
+    path.write_text(
+        "Date,Query,Impressions,Clicks,CTR,Position\n2026-07-01,first,100,1,1.0%,4.0\n",
+        encoding="utf-8-sig",
+    )
+    gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    with pytest.raises(UsageError, match="already bound"):
+        gsc.import_gsc_csv(db, ws, "acme", path, property_url="https://other.example/")
+    assert db._conn.execute("SELECT COUNT(*) FROM gsc_queries").fetchone()[0] == 1
+
+
+def test_upsert_normalizes_nullable_dimensions_and_updates(ws, db):
+    row = {"data_date": "2026-07-01", "query": "q", "page": None, "device": None, "country": None,
+           "search_type": "web", "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 5.0,
+           "pulled_at": "2026-08-01T00:00:00"}
+    db.upsert_gsc_query_rows(PROPERTY, [row])
+    row.update(clicks=2, impressions=20, pulled_at="2026-08-02T00:00:00")
+    db.upsert_gsc_query_rows(PROPERTY, [row])
+    stored = db._conn.execute("SELECT * FROM gsc_queries").fetchall()
+    assert len(stored) == 1
+    assert stored[0]["page"] == stored[0]["device"] == stored[0]["country"] == ""
+    assert stored[0]["clicks"] == 2
+
+
+def test_legacy_nullable_gsc_schema_migrates_and_deduplicates(tmp_path):
+    path = tmp_path / "legacy.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """CREATE TABLE gsc_queries (
+          property_url TEXT NOT NULL, data_date TEXT NOT NULL, query TEXT NOT NULL,
+          page TEXT, device TEXT, country TEXT, search_type TEXT NOT NULL,
+          clicks INTEGER NOT NULL, impressions INTEGER NOT NULL, ctr REAL NOT NULL,
+          position REAL NOT NULL, pulled_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_gsc_queries_prop_date ON gsc_queries(property_url, data_date);"""
+    )
+    conn.executemany(
+        "INSERT INTO gsc_queries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [(PROPERTY, "2026-07-01", "q", None, None, None, "web", 1, 10, 0.1, 5, "2026-08-01"),
+         (PROPERTY, "2026-07-01", "q", None, None, None, "web", 9, 90, 0.1, 5, "2026-08-02")],
+    )
+    conn.commit()
+    conn.close()
+    migrated = Database(path)
+    row = migrated._conn.execute("SELECT * FROM gsc_queries").fetchone()
+    assert migrated._conn.execute("SELECT COUNT(*) FROM gsc_queries").fetchone()[0] == 1
+    assert row["clicks"] == 9 and row["page"] == row["device"] == row["country"] == ""
+    migrated.close()
+    rerun = Database(path)
+    assert rerun._conn.execute("SELECT COUNT(*) FROM gsc_queries").fetchone()[0] == 1
+    rerun.close()
+
+
+def test_legacy_gsc_migration_failure_rolls_back_table_and_data(tmp_path):
+    path = tmp_path / "legacy-invalid.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """CREATE TABLE gsc_queries (
+          property_url TEXT NOT NULL, data_date TEXT NOT NULL, query TEXT NOT NULL,
+          page TEXT, device TEXT, country TEXT, search_type TEXT,
+          clicks INTEGER NOT NULL, impressions INTEGER NOT NULL, ctr REAL NOT NULL,
+          position REAL NOT NULL, pulled_at TEXT NOT NULL
+        );
+        CREATE INDEX idx_gsc_queries_prop_date ON gsc_queries(property_url, data_date);"""
+    )
+    conn.execute(
+        "INSERT INTO gsc_queries VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (PROPERTY, "2026-07-01", "q", None, None, None, None, 1, 10, 0.1, 5, "2026-08-01"),
+    )
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        Database(path)
+
+    check = sqlite3.connect(path)
+    tables = {row[0] for row in check.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    row = check.execute("SELECT * FROM gsc_queries").fetchone()
+    assert "gsc_queries" in tables
+    assert "gsc_queries_legacy" not in tables
+    assert row == (PROPERTY, "2026-07-01", "q", None, None, None, None, 1, 10, 0.1, 5, "2026-08-01")
+    check.close()
+
+
+def test_inspect_unknown_mobile_verdict_is_null(ws, db, connected, stub):
+    _GscStub.inspect_payload["inspectionResult"].pop("mobileUsabilityResult", None)
+    result = gsc.inspect_url(db, ws, "acme", "https://www.example.com/new-article/")
+    assert result["mobile_usable"] is None
 
 
 def test_import_csv_writes_page_dimension(ws, db, tmp_path):
@@ -956,6 +1101,14 @@ def test_insights_reports(ws, db):
     assert rising[0]["impressions_first_half"] == 13 * 40
     assert rising[0]["impressions_second_half"] == 15 * 80
     assert rising[0]["growth"] == round((15 * 80) / (13 * 40), 2)
+    assert result["partial"] is True
+    assert "not a complete keyword database" in result["data_limit_note"]
+
+
+def test_cli_version_is_successful():
+    proc = subprocess.run([sys.executable, "-m", "seo_writer", "--version"], capture_output=True, text=True)
+    assert proc.returncode == 0
+    assert "seo-writer" in proc.stdout and "rules" in proc.stdout
 
 
 def test_insights_requires_property(ws, db):

@@ -45,7 +45,10 @@ from .db import Database
 from .errors import SeoWriterError, UsageError
 from .ids import utcnow
 
+CLOUD_PLATFORM_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 SCOPE = "https://www.googleapis.com/auth/webmasters.readonly"
+GCLOUD_SCOPES = [CLOUD_PLATFORM_SCOPE, SCOPE]
+GCLOUD_SCOPE_ARG = ",".join(GCLOUD_SCOPES)
 GCLOUD_ADC_PATH = Path(
     os.environ.get("SEO_WRITER_GSC_ADC_PATH")
     or Path.home() / ".config" / "gcloud" / "application_default_credentials.json"
@@ -145,7 +148,7 @@ def load_adc(path: Path | None = None) -> Credentials:
     if not adc.exists():
         raise GscError(
             f"gcloud ADC credentials not found at {adc}. "
-            f'Run: gcloud auth application-default login --scopes="{SCOPE}"'
+            f'Run: gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"'
         )
     try:
         payload = json.loads(adc.read_text(encoding="utf-8"))
@@ -154,7 +157,7 @@ def load_adc(path: Path | None = None) -> Credentials:
     if not isinstance(payload, dict) or payload.get("type") != "authorized_user":
         raise GscError(
             f"{adc} is not an authorized_user credential (type={payload.get('type')!r}); "
-            f're-run gcloud auth application-default login --scopes="{SCOPE}"'
+            f're-run gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"'
         )
     client_id = str(payload.get("client_id") or "")
     client_secret = str(payload.get("client_secret") or "")
@@ -162,7 +165,7 @@ def load_adc(path: Path | None = None) -> Credentials:
     if not client_id or not client_secret or not refresh_token:
         raise GscError(
             f"{adc} is missing client_id/client_secret/refresh_token; "
-            f're-run gcloud auth application-default login --scopes="{SCOPE}"'
+            f're-run gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"'
         )
     quota_project_id = payload.get("quota_project_id")
     if not isinstance(quota_project_id, str) or not quota_project_id:
@@ -402,7 +405,9 @@ def check_scope(
     except json.JSONDecodeError as exc:
         raise GscError("tokeninfo endpoint returned a non-JSON response") from exc
     scopes = str(payload.get("scope") or "").split()
-    return {"scopes": scopes, "has_webmasters": any("webmasters" in s for s in scopes)}
+    has_readonly = SCOPE in scopes
+    has_write = "https://www.googleapis.com/auth/webmasters" in scopes
+    return {"scopes": scopes, "has_readonly": has_readonly, "has_webmasters": has_readonly or has_write}
 
 
 def verify_credentials(
@@ -712,8 +717,16 @@ def pull_search_analytics(
         "dates_pulled": 0,
         "rows_written": 0,
         "api_calls": 0,
+        "data_limit_note": (
+            "Search Console returns the most important rows subject to internal limits; "
+            "this is not a complete keyword database."
+        ),
     }
     token: str | None = None
+    def counted_query(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        stats["api_calls"] += 1
+        return _query_page(*args, **kwargs)
+
     for dimensions in dims:
         dim = ",".join(dimensions)
         for day in dates:
@@ -727,7 +740,7 @@ def pull_search_analytics(
             while True:
                 limiter.wait()
                 payload = with_backoff(
-                    _query_page,
+                    counted_query,
                     api_base,
                     token,
                     property_url,
@@ -738,7 +751,6 @@ def pull_search_analytics(
                     attempts=attempts,
                     sleep=sleep,
                 )
-                stats["api_calls"] += 1
                 rows = payload.get("rows") or []
                 db.upsert_gsc_query_rows(
                     property_url, _api_rows_to_db_rows(property_url, day, list(dimensions), rows)
@@ -755,7 +767,7 @@ def pull_search_analytics(
 
 
 # ---------------------------------------------------------------------------
-# inspect + sitemap
+# inspect
 # ---------------------------------------------------------------------------
 
 
@@ -794,7 +806,10 @@ def inspect_url(
         "url": url,
         "inspected_at": utcnow(),
         "index_status": coverage,
-        "mobile_usable": 1 if mobile.get("verdict") == "MOBILE_USABLE" else 0,
+        "mobile_usable": (
+            1 if mobile.get("verdict") == "MOBILE_USABLE"
+            else 0 if mobile.get("verdict") else None
+        ),
         "last_crawl": index.get("lastCrawlTime"),
     }
     db.upsert_gsc_inspection(row)
@@ -804,37 +819,8 @@ def inspect_url(
         "url": url,
         "index_status": COVERAGE_LABELS.get(coverage, coverage or "unspecified"),
         "coverage_state": coverage,
-        "mobile_usable": bool(row["mobile_usable"]),
+        "mobile_usable": None if row["mobile_usable"] is None else bool(row["mobile_usable"]),
         "last_crawl": row["last_crawl"],
-    }
-
-
-def submit_sitemap(
-    db: Database,
-    ws: Workspace,
-    brand: str,
-    sitemap_url: str,
-    *,
-    api_base: str | None = None,
-) -> dict[str, Any]:
-    api_base = api_base or API_BASE
-    parsed = urllib.parse.urlparse(sitemap_url.strip())
-    if parsed.scheme not in ("http", "https") or not parsed.netloc:
-        raise UsageError(f"invalid sitemap url '{sitemap_url}': expected https://…")
-    sitemap_url = parsed.geturl()
-    creds, prop = load_credentials(db, ws, brand)
-    property_url = _require_property(prop, brand)
-    token = refresh_access_token(creds)
-    url = (
-        f"{api_base}/webmasters/v3/sites/{urllib.parse.quote(property_url, safe='')}"
-        f"/sitemaps/{urllib.parse.quote(sitemap_url, safe='')}"
-    )
-    _api_request("PUT", url, access_token=token, quota_project_id=creds.quota_project_id)
-    return {
-        "brand": brand,
-        "property": property_url,
-        "sitemap": sitemap_url,
-        "submitted": True,
     }
 
 
@@ -859,7 +845,6 @@ def import_gsc_csv(
     csv_path: str | Path,
     *,
     property_url: str | None = None,
-    data_date: str | None = None,
 ) -> dict[str, Any]:
     """Import a GSC UI export CSV (BOM/quotes tolerant) into gsc_queries.
 
@@ -868,7 +853,13 @@ def import_gsc_csv(
     imported data too.
     """
     prop = db.get_gsc_property(brand)
-    resolved_property = property_url or (prop or {}).get("property_url")
+    requested_property = _validate_property(property_url) if property_url else None
+    bound_property = (prop or {}).get("property_url")
+    if requested_property and bound_property and requested_property != bound_property:
+        raise UsageError(
+            f"brand '{brand}' is already bound to {bound_property}; refusing to mix properties"
+        )
+    resolved_property = requested_property or bound_property
     if not resolved_property:
         raise UsageError(
             f"brand '{brand}' has no GSC property; run `gsc connect --brand {brand} --property <url>` "
@@ -893,15 +884,8 @@ def import_gsc_csv(
             raise UsageError(
                 f"{path} does not look like a GSC export (no Query/Page column; headers: {headers})"
             )
-        if date_col is None and not data_date:
-            raise UsageError(
-                f"{path} has no Date column; pass --date YYYY-MM-DD to set the data date"
-            )
-        if data_date:
-            try:
-                date.fromisoformat(data_date)
-            except ValueError as exc:
-                raise UsageError(f"invalid --date '{data_date}': expected YYYY-MM-DD") from exc
+        if date_col is None:
+            raise UsageError(f"{path} has no Date column; range-aggregate CSV cannot enter daily insights")
 
         rows: list[dict[str, Any]] = []
         skipped = 0
@@ -911,13 +895,11 @@ def import_gsc_csv(
             if not raw_query and not raw_page:
                 skipped += 1
                 continue
-            day = data_date
-            if not day:
-                day = (record.get(date_col) or "").strip()
-                try:
-                    date.fromisoformat(day)
-                except ValueError as exc:
-                    raise UsageError(f"line {line_no}: invalid date {day!r}: expected YYYY-MM-DD") from exc
+            day = (record.get(date_col) or "").strip()
+            try:
+                date.fromisoformat(day)
+            except ValueError as exc:
+                raise UsageError(f"line {line_no}: invalid date {day!r}: expected YYYY-MM-DD") from exc
             ctr_raw = record.get("CTR") or ""
             rows.append(
                 {
@@ -936,13 +918,16 @@ def import_gsc_csv(
                 }
             )
     written = db.upsert_gsc_query_rows(resolved_property, rows)
+    if prop is None or prop.get("auth_path") == "csv-import":
+        db.upsert_gsc_property(brand, resolved_property, "csv-import", None, status="imported")
     return {
         "brand": brand,
         "property": resolved_property,
         "file": str(path),
         "rows_imported": written,
         "rows_skipped": skipped,
-        "data_date": data_date or "from file",
+        "data_date": "from file",
+        "source": "csv-import",
         "columns": headers,
     }
 
@@ -1060,6 +1045,12 @@ def insights(
         "property": property_url,
         "window_days": window,
         "range": [start.isoformat(), end.isoformat()],
+        "source": "csv-import" if prop.get("auth_path") == "csv-import" else "api",
+        "partial": True,
+        "data_limit_note": (
+            "Search Console returns the most important rows subject to internal limits; "
+            "this is not a complete keyword database."
+        ),
         "high_impressions_low_ctr": high_low[:20],
         "rising_queries": rising[:20],
         "url_performance": _url_performance(ws, brand, rows, url) if url else None,
@@ -1112,7 +1103,7 @@ def gsc_status(db: Database, ws: Workspace, brand: str) -> dict[str, Any]:
     client_file = client_json_path(ws, brand)
     result: dict[str, Any] = {
         "brand": brand,
-        "connected": prop is not None,
+        "connected": prop is not None and prop.get("status") == "connected",
         "credentials": {
             "adc_file": str(GCLOUD_ADC_PATH) if GCLOUD_ADC_PATH.exists() else None,
             "adc_file_exists": GCLOUD_ADC_PATH.exists(),
@@ -1125,6 +1116,8 @@ def gsc_status(db: Database, ws: Workspace, brand: str) -> dict[str, Any]:
         return result
     result["property"] = prop["property_url"]
     result["auth_path"] = prop["auth_path"]
+    result["source"] = "csv-import" if prop["auth_path"] == "csv-import" else "api"
+    result["status"] = prop["status"]
     result["client_json_path"] = prop.get("client_json_path")
     result["last_synced_at"] = prop.get("last_synced_at")
     result["sync"] = db.gsc_sync_range(prop["property_url"])
@@ -1163,14 +1156,14 @@ def setup_guide(
                 "status": "adc-invalid",
                 "adc_file": str(adc),
                 "message": str(exc),
-                "next": f're-run: gcloud auth application-default login --scopes="{SCOPE}"',
+                "next": f're-run: gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"',
             }
         if not verification["has_webmasters"]:
             return {
                 "status": "adc-missing-scope",
                 "adc_file": str(adc),
                 "message": verification["message"],
-                "next": f're-run: gcloud auth application-default login --scopes="{SCOPE}"',
+                "next": f're-run: gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"',
             }
         return {
             "status": "ready",
@@ -1198,10 +1191,10 @@ def setup_guide(
         "options": [
             {
                 "path": "A",
-                "title": "gcloud ADC (preferred — the customer never touches GCP)",
+                "title": "gcloud ADC（默认由交付人员协助完成一次 Google 授权）",
                 "steps": [
                     "install the Google Cloud SDK once (we do this during delivery)",
-                    f'gcloud auth application-default login --scopes="{SCOPE}"',
+                    f'gcloud auth application-default login --scopes="{GCLOUD_SCOPE_ARG}"',
                     f"then run `seo-writer gsc auth --brand {brand}`",
                 ],
             },
@@ -1417,10 +1410,10 @@ def gcloud_auth(
     run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
 ) -> dict[str, Any]:
     """Authorize via gcloud application-default login (customer does this once)."""
-    cmd = [gcloud_bin, "auth", "application-default", "login", "--scopes", SCOPE]
+    cmd = [gcloud_bin, "auth", "application-default", "login", "--scopes", ",".join(GCLOUD_SCOPES)]
     if no_launch_browser:
         cmd.append("--no-launch-browser")
-    proc = run(cmd, capture_output=True, text=True, timeout=300)
+    proc = run(cmd, capture_output=False, text=True, timeout=300)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip() or f"exit {proc.returncode}"
         raise GscError(f"gcloud authorization failed ({detail}); run it manually: {' '.join(cmd)}")

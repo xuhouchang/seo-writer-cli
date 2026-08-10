@@ -174,9 +174,9 @@ CREATE TABLE IF NOT EXISTS gsc_queries (
   property_url TEXT NOT NULL,
   data_date TEXT NOT NULL,
   query TEXT NOT NULL,
-  page TEXT,
-  device TEXT,
-  country TEXT,
+  page TEXT NOT NULL DEFAULT '',
+  device TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
   search_type TEXT NOT NULL DEFAULT 'web',
   clicks INTEGER NOT NULL DEFAULT 0,
   impressions INTEGER NOT NULL DEFAULT 0,
@@ -219,6 +219,50 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+        self._migrate_gsc_queries()
+
+    def _migrate_gsc_queries(self) -> None:
+        """Rebuild the legacy nullable-key table and deterministically dedupe it."""
+        columns = self._conn.execute("PRAGMA table_info(gsc_queries)").fetchall()
+        nullable = {row[1] for row in columns if row[1] in {"page", "device", "country"} and not row[3]}
+        if not nullable:
+            return
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute("DROP INDEX IF EXISTS idx_gsc_queries_prop_date")
+            self._conn.execute("ALTER TABLE gsc_queries RENAME TO gsc_queries_legacy")
+            self._conn.execute(
+                """CREATE TABLE gsc_queries (
+                  property_url TEXT NOT NULL, data_date TEXT NOT NULL, query TEXT NOT NULL,
+                  page TEXT NOT NULL DEFAULT '', device TEXT NOT NULL DEFAULT '',
+                  country TEXT NOT NULL DEFAULT '',
+                  search_type TEXT NOT NULL DEFAULT 'web', clicks INTEGER NOT NULL DEFAULT 0,
+                  impressions INTEGER NOT NULL DEFAULT 0, ctr REAL NOT NULL DEFAULT 0,
+                  position REAL NOT NULL DEFAULT 0, pulled_at TEXT NOT NULL,
+                  PRIMARY KEY (property_url, data_date, query, page, device, country, search_type)
+                )"""
+            )
+            self._conn.execute(
+                """INSERT INTO gsc_queries
+                SELECT property_url, data_date, query, COALESCE(page, ''), COALESCE(device, ''),
+                       COALESCE(country, ''), search_type, clicks, impressions, ctr, position, pulled_at
+                FROM (
+                  SELECT legacy.*, ROW_NUMBER() OVER (
+                    PARTITION BY property_url, data_date, query, COALESCE(page, ''),
+                                 COALESCE(device, ''), COALESCE(country, ''), search_type
+                    ORDER BY pulled_at DESC, rowid DESC
+                  ) AS rn
+                  FROM gsc_queries_legacy AS legacy
+                ) WHERE rn = 1"""
+            )
+            self._conn.execute(
+                "CREATE INDEX idx_gsc_queries_prop_date ON gsc_queries(property_url, data_date)"
+            )
+            self._conn.execute("DROP TABLE gsc_queries_legacy")
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def close(self) -> None:
         self._conn.close()
@@ -664,15 +708,16 @@ class Database:
     # ---- GSC (Google Search Console) ----
 
     def upsert_gsc_property(
-        self, brand: str, property_url: str, auth_path: str, client_json_path: str | None = None
+        self, brand: str, property_url: str, auth_path: str, client_json_path: str | None = None,
+        *, status: str = "connected",
     ) -> dict[str, Any]:
         self._conn.execute(
             "INSERT INTO gsc_properties (brand, property_url, auth_path, client_json_path, status)"
-            " VALUES (?, ?, ?, ?, 'connected')"
+            " VALUES (?, ?, ?, ?, ?)"
             " ON CONFLICT(brand) DO UPDATE SET property_url = excluded.property_url,"
             " auth_path = excluded.auth_path, client_json_path = excluded.client_json_path,"
-            " status = 'connected'",
-            (brand, property_url, auth_path, client_json_path),
+            " status = excluded.status",
+            (brand, property_url, auth_path, client_json_path, status),
         )
         self._conn.commit()
         return {
@@ -680,7 +725,7 @@ class Database:
             "property_url": property_url,
             "auth_path": auth_path,
             "client_json_path": client_json_path,
-            "status": "connected",
+            "status": status,
         }
 
     def get_gsc_property(self, brand: str) -> dict[str, Any] | None:
@@ -690,7 +735,9 @@ class Database:
 
     def update_gsc_property_synced(self, brand: str, at: str) -> None:
         self._conn.execute(
-            "UPDATE gsc_properties SET last_synced_at = ?, status = 'connected' WHERE brand = ?",
+            "UPDATE gsc_properties SET last_synced_at = ?,"
+            " status = CASE WHEN auth_path IN ('gcloud-adc', 'own-client')"
+            " THEN 'connected' ELSE status END WHERE brand = ?",
             (at, brand),
         )
         self._conn.commit()
@@ -708,9 +755,9 @@ class Database:
                     property_url,
                     r["data_date"],
                     r["query"],
-                    r.get("page"),
-                    r.get("device"),
-                    r.get("country"),
+                    r.get("page") or "",
+                    r.get("device") or "",
+                    r.get("country") or "",
                     r.get("search_type", "web"),
                     r["clicks"],
                     r["impressions"],

@@ -117,10 +117,9 @@ seo-writer gsc setup <brand>                          # credential state + guida
 seo-writer gsc auth <brand> [--no-launch-browser] [--gcloud]
 seo-writer gsc sites <brand>
 seo-writer gsc connect <brand> --property <url>       # bind property to brand
-seo-writer gsc pull <brand> [--days 30] [--force]     # incremental, idempotent
+seo-writer gsc pull <brand> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--force] # incremental, idempotent
 seo-writer gsc inspect --brand <brand> --url <url>  # uses the bound property
-seo-writer gsc sitemap submit <brand> --property <url> --path <path>
-seo-writer gsc import <brand> <gsc.csv> [--date YYYY-MM-DD]  # GSC UI export
+seo-writer gsc import <brand> <gsc.csv>                         # dated GSC UI export
 seo-writer gsc insights <brand> [--window 28]
 seo-writer --json gsc status --brand <brand>   # --json is a global flag
 ```
@@ -136,9 +135,14 @@ GSC integration overview (zero third-party runtime deps, stdlib only):
   exponential backoff (1s→60s + jitter) and a 1,200 QPM rate limiter.
 - **`insights`** — high-impressions/low-CTR queries, rising queries,
   URL performance vs the `onboard fetch` audit baseline.
+- GSC is read-only: SEO Writer can inspect Search Console data and read local
+  or existing sitemap information, but never submits or changes a Sitemap.
+  Search Analytics exposes the most important rows subject to Google's
+  internal limits; results are not a complete keyword database. CSV fallback
+  imports must contain a real `Date` column and are labeled `csv-import`.
 - Credentials and GSC data stay on the customer machine
   (`--data-dir/.../gsc/<brand>/`, token files chmod-600); nothing is sent to
-  third parties. See `docs/SEO-WRITER-GSC-PLAN.md` for the full design.
+  third parties. See the GSC sections in `docs/ARCHITECTURE.md` for the design.
 
 Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
 
