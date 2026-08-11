@@ -10,19 +10,18 @@ substantive product claim in the final copy is traceable to an approved entry
 in the brand's facts ledger, and every blocking rule is enforced with an audit
 trail — never silently downgraded.
 
-Phase 1 MVP is **offline and deterministic** for article production: all five
-provider roles (keyword / SERP / web-fetch / community / LLM) run on bundled
-mock profiles — no paid API, no API keys. The only network touchpoint is
-onboarding (`onboard fetch` crawls the customer's own website over plain
-HTTP; `providers verify` pings the customer's own DataForSEO/Reddit
-credentials). Real provider roles are a Phase 2 swap behind the same
-interfaces (see `docs/MIGRATION.md`).
+The public product is an Agent Skill plus a local Python CLI. Production
+research uses user-configured DataForSEO, Reddit and plain HTTP page fetching;
+the bundled mock providers are only for tests and demonstrations. The Skill's
+agent-authored `--from-file` workflow does not require a CLI LLM key. Real
+provider calls happen only after the user manually configures and verifies
+their own accounts in the data directory.
 
 ## Why this shape
 
 - **The Skill + local CLI is the product.** The Skill governs the Agent
   workflow; the CLI enforces state, approval, claims, audit and export. There
-  is no SaaS, web UI, payment flow or CMS publishing in Phase 1.
+  is no SaaS, web UI, payment flow or CMS publishing in this release.
 - **Research gate first.** An outline is never generated before the gate
   passes (3 queries, 5 opened SERP pages, 10 opened community threads across
   4 subreddits, second platform or documented insufficiency — floors equal to
@@ -65,6 +64,12 @@ sw project create acme blog
 # import the *example* pack — replace with your customer's real facts first
 sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
 sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
+
+# production: configure the user's own provider accounts before research
+sw providers configure --name dataforseo
+sw providers configure --name reddit
+sw providers status
+# import a policy selecting dataforseo + reddit + http (see the template)
 
 sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
 sw run research <run-id>
@@ -184,11 +189,12 @@ New-brand setup is a four-step journey; a ready-made agent wrapper lives in
    `.secrets.yaml` in the data dir — never in git, never echoed — and every
    provider is verified live on configure (DataForSEO ping, Reddit OAuth).
    Env defaults are offered (DATAFORSEO_LOGIN/PASSWORD, REDDIT_CLIENT_ID/
-   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`.
+   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`. Production research
+   refuses to silently fall back to mock data when these providers are absent.
 
 The confirmed feature summary seeds `facts.yaml` for the production pipeline.
-Configured-but-unverified credentials block nothing yet — the real
-search/community providers are a Phase 2 swap.
+The real search/community providers are selected by `policy.yaml`; configure
+and verify them before `run research`.
 
 ## Agent workflow — no LLM API needed
 
@@ -233,8 +239,9 @@ previous approval (re-approve).
   costs, audits. **Objects** (outline revisions, draft, exported manifest)
   at `<data-dir>/<workspace>/objects/<run-id>/`.
 
-Config holds provider *profile references* only; secrets never live in YAML —
-Phase 2 real providers read them from env (`docs/MIGRATION.md`).
+Config holds provider *profile references* only; secrets never live in YAML.
+Production adapters read credentials from the user-owned data directory
+(`docs/MIGRATION.md`).
 
 ## Evidence typing
 
@@ -282,7 +289,7 @@ src/seo_writer/
   onboard.py             # onboarding: site memory, crawl + SEO audit, provider config
   seo_rules.py           # SEO audit rules (~100, seo-audit-skill MIT subset; see NOTICE)
   validators/            # research_gate, claim_safety (pure, unit-testable)
-  providers/             # ProviderResult + mock keyword/serp/webfetch/community/llm
+  providers/             # ProviderResult + real adapters and test-only mocks
 docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
 skills/                  # seo-writer (production) + seo-writer-onboarding (brand setup)
 examples/brand-packs/    # generic-anonymous example pack (no customer facts)
@@ -291,26 +298,24 @@ tests/                   # AC1–AC10 + validator units, fixture-driven mocks
 
 ## Roadmap
 
-- **Phase 1 (current public beta)** — offline deterministic governance pipeline
-  (mock providers, audit/approval/claim-safety machinery) plus
-  onboarding: site memory, website crawl + baseline SEO audit, confirmed
-  feature summary, provider credential setup with live verification.
-- **Phase 2 — bring your own data sources.** The 5 provider roles get real
-  implementations (DataForSEO, SERP APIs, Reddit, OpenRouter/LLM) that *you*
-  configure with *your* keys via `policy.yaml` + environment variables. The
-  mocks remain the compatibility contract for tests. See
-  `docs/MIGRATION.md` for the per-role checklist.
+- **Current public beta** — Skill onboarding, user-configured DataForSEO and
+  Reddit research, HTTP page evidence, GSC customer-data workflows, and the
+  local governance pipeline. Mocks remain the compatibility contract for
+  tests and demos.
+- **Future** — optional direct LLM provider support and additional search or
+  community adapters. The agent-authored file workflow is already supported.
 - **Phase 3 — commercial packaging** (usage metering) only when
   there is a user base to justify it. The codebase is built so a hosted
   gateway can be added without changing the CLI contract.
 
-## Security posture (Phase 1)
+## Security posture
 
 - No secrets, keys, or credentials in the repo — ever.
 - `~/.seo-writer` workspace is user-owned and gitignored.
 - Facts/claims are **project-isolated per brand**; the example pack is
   deliberately anonymous. Never commit a customer's real facts ledger.
-- Real providers in Phase 2: interfaces and config schemas only, secrets from
-  env (`docs/MIGRATION.md` for the full checklist).
+- Real provider credentials are entered by the customer and stored only in the
+  chmod-600 data directory; they are never in policy YAML, artifacts, logs or
+  this repository. See `docs/MIGRATION.md` for provider details.
 - Model weights / provider artifacts never live in the repo (see global
   `~/.cache/models/` convention in the developer environment rules).

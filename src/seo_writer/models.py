@@ -108,6 +108,10 @@ class ProviderPolicy(BaseModel):
     name: str = "mock"
     profile: str = "mock-default"
     fixture_dir: str | None = None
+    base_url: str | None = None
+    location_code: int = 2840
+    language_code: str = "en"
+    device: str = "desktop"
     retryable: bool = True
     budget_cap: float | None = None
 

@@ -3,7 +3,7 @@ name: seo-writer-onboarding
 description: >-
   Onboard a new brand into seo-writer: record its website, crawl it, run a
   baseline SEO audit, write a feature summary for customer confirmation, and
-  configure DataForSEO/Reddit credentials. Use when a new customer/brand is
+  configure and verify DataForSEO/Reddit credentials. Use when a new customer/brand is
   being set up for the first time, before any article production.
 ---
 
@@ -56,8 +56,9 @@ sw onboard fetch <brand>
 sw onboard confirm <brand> --approver "<customer-email>"    # -> status: confirmed
 
 # 4. provider credentials (account-level): DataForSEO + Reddit
-sw providers configure                                     # interactive prompts
-sw providers status                                        # configured/verified?
+sw providers configure --name dataforseo                   # user supplies login/password
+sw providers configure --name reddit                       # user supplies client id/secret
+sw providers status                                        # both must be configured/verified
 ```
 
 ## Step 3 — feature extraction (your job)
@@ -106,8 +107,9 @@ Rules:
 - Existing environment variables (DATAFORSEO_LOGIN, DATAFORSEO_PASSWORD,
   REDDIT_CLIENT_ID, REDDIT_CLIENT_SECRET) are offered as defaults — press
   enter to use them. Reddit requests honour `REDDIT_PROXY_URL`.
-- Configured-but-unverified credentials still block nothing today: the real
-  search/community providers are a Phase 2 swap behind the same interfaces.
+- Production research requires a policy selecting `dataforseo`, `reddit` and
+  `http`. Missing or unverified credentials are a hard onboarding blocker;
+  research never silently falls back to mock data.
 
 ## Step 5 — connect Google Search Console (GSC)
 
@@ -165,5 +167,6 @@ The confirmed feature summary feeds the production pipeline:
 2. `seo-writer brand facts import <brand> <facts.yaml>` + policy import.
 3. Switch to the **seo-writer** skill (article production, research gate,
    approval, claim-safe drafting) — that skill's gate counts are
-   provider-driven, which is where Phase 2 search/community providers
-   (DataForSEO, Reddit) plug in.
+   provider-driven. Before switching to the production skill, import the real
+   provider policy template, replace its brand slug, and confirm `providers
+   status` shows both external providers verified.

@@ -521,7 +521,13 @@ def run_research(
     def run() -> dict:
         _, db = _open()
         run, _brand, policy = _run_context(db, run_id)
-        return services.run_research(db, run, policy, key=idempotency_key)
+        return services.run_research(
+            db,
+            run,
+            policy,
+            key=idempotency_key,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -559,7 +565,15 @@ def run_outline(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_outline(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_outline(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -601,7 +615,15 @@ def run_draft(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_draft(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_draft(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -626,7 +648,15 @@ def run_metadata(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_metadata(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_metadata(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -713,7 +743,7 @@ def run_retry(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_retry(db, run, brand, step, policy)
+        return services.run_retry(db, run, brand, step, policy, provider_data_dir=state.data_dir)
 
     return _guard(run)
 

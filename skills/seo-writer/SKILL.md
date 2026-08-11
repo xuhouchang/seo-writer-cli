@@ -64,6 +64,16 @@ sw brand create <brand>
 sw project create <brand> <project>
 sw brand facts import <brand> <path/to/facts.yaml>
 sw brand policy import <brand> <path/to/policy.yaml>
+
+# production research prerequisite: the user must configure these manually
+sw providers configure --name dataforseo
+sw providers configure --name reddit
+sw providers status
+
+Use a policy selecting `dataforseo` for keyword/SERP, `reddit` for community,
+and `http` for opened pages. Mock policies are for tests and synthetic demos
+only. If a production provider is missing or unverified, stop and ask the user
+to complete onboarding; never substitute mock evidence.
 ```
 
 The brand facts ledger (`facts.yaml`) is the single source of truth for what

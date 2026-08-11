@@ -1,9 +1,10 @@
 # seo-writer — Architecture
 
-Phase 1 MVP: local-first, offline, deterministic. This document explains the
-component layout, the state machine, the approval model, idempotency, and the
-audit/cost model. `docs/AUDIT.md` covers the audit guarantees in depth;
-`docs/MIGRATION.md` covers the Phase 2 path to real providers.
+Public beta: local-first, Skill-driven and research-gated. Production research
+uses user-configured adapters; deterministic mocks are reserved for tests and
+demos. This document explains the component layout, state machine, approval
+model, idempotency, and audit/cost model. `docs/AUDIT.md` covers audit
+guarantees; `docs/MIGRATION.md` covers provider configuration.
 
 ## 1. Layer overview
 
@@ -21,8 +22,8 @@ audit/cost model. `docs/AUDIT.md` covers the audit guarantees in depth;
 │  audits,      │ invalidation │                              │
 │  approvals)   │              │                              │
 ├───────────────┴──────────────┴──────────────────────────────┤
-│ providers/  ProviderResult · mock keyword/serp/webfetch/    │
-│             community/llm (fixture-driven, deterministic)   │
+│ providers/  ProviderResult · real adapters + test mocks    │
+│             DataForSEO / Reddit / HTTP / agent-from-file   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -219,4 +220,5 @@ src/seo_writer/
     mock_community.py  thread rows across subreddits + second platform
     mock_llm.py        outline/draft/metadata templates; claim-safe by
                        construction; inject fixtures for failure-path tests
+    real.py             user-configured DataForSEO, Reddit and HTTP adapters
 ```

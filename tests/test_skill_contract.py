@@ -27,3 +27,17 @@ def test_skill_shell_declares_local_only_credential_boundaries() -> None:
     assert "synthetic" in combined
     assert "real" in combined and "oauth" in combined
     assert "provider credentials" in combined
+
+
+def test_production_skill_requires_user_configured_real_research() -> None:
+    onboarding = (ROOT / "skills" / "seo-writer-onboarding" / "SKILL.md").read_text(encoding="utf-8")
+    production = (ROOT / "skills" / "seo-writer" / "SKILL.md").read_text(encoding="utf-8")
+    policy = (ROOT / "examples" / "brand-packs" / "policy-real.template.yaml").read_text(encoding="utf-8")
+    combined = f"{onboarding}\n{production}".lower()
+    assert "providers configure --name dataforseo" in combined
+    assert "providers configure --name reddit" in combined
+    assert "providers status" in combined
+    assert "never silently falls back to mock data" in combined
+    assert "name: dataforseo" in policy
+    assert "name: reddit" in policy
+    assert "name: http" in policy

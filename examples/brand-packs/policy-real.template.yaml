@@ -1,0 +1,34 @@
+# Copy this file outside the repository, replace brand, and import it after
+# the user has configured and verified DataForSEO and Reddit.
+brand: replace-me
+providers:
+  keyword:
+    name: dataforseo
+    profile: dataforseo-us
+    location_code: 2840
+    language_code: en
+    device: desktop
+  serp:
+    name: dataforseo
+    profile: dataforseo-us
+    location_code: 2840
+    language_code: en
+    device: desktop
+  webfetch:
+    name: http
+    profile: real-http
+  community:
+    name: reddit
+    profile: reddit-default
+  # The Skill writes outline/draft/metadata with --from-file; no CLI LLM call.
+  llm:
+    name: mock
+    profile: agent-from-file
+research_gate:
+  min_queries: 3
+  min_opened_serp_pages: 5
+  min_opened_threads: 10
+  min_subreddits: 4
+  require_second_platform: true
+retries: 2
+cost_limit_per_run: 5.0

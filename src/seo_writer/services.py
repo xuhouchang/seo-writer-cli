@@ -212,7 +212,12 @@ def _evidence_row(**kw: Any) -> dict[str, Any]:
 
 
 def run_research(
-    db: Database, run: dict, policy: PolicyYaml, providers: dict | None = None, key: str | None = None
+    db: Database,
+    run: dict,
+    policy: PolicyYaml,
+    providers: dict | None = None,
+    key: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     _resume_allowed(run, "research")
     run_id = run["id"]
@@ -220,7 +225,7 @@ def run_research(
     prior = db.get_command_result(run_id, "research", key)
     if prior is not None:
         return prior
-    providers = providers or build_providers(policy)
+    providers = providers or build_providers(policy, data_dir=provider_data_dir)
     brief = json.loads(run["brief_snapshot"])
     kw = providers["keyword"]
     serp = providers["serp"]
@@ -260,7 +265,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"KW-{i + 1:02d}",
                     source_type="keyword",
-                    fetch_method="mock_api",
+                    fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     title=k,
@@ -271,7 +276,7 @@ def run_research(
             _evidence_row(
                 evidence_id="KW-REL-01",
                 source_type="keyword",
-                fetch_method="mock_api",
+                fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                 opened_current_run=False,
                 evidence_origin="structured_discovery",
                 title="related keywords",
@@ -282,7 +287,7 @@ def run_research(
             _evidence_row(
                 evidence_id="KW-PAA-01",
                 source_type="keyword",
-                fetch_method="mock_api",
+                fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                 opened_current_run=False,
                 evidence_origin="structured_discovery",
                 title="PAA candidates",
@@ -315,17 +320,17 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"Q-{i + 1:02d}",
                     source_type="search_query",
-                    fetch_method="mock_api",
+                    fetch_method=q.data.get("query_method", "mock_api"),
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     title=q.data["query"],
                     grade=label,
                     details={
                         "query": q.data["query"],
-                        "query_method": "mock_api",
+                        "query_method": q.data.get("query_method", "mock_api"),
                         "timestamp": q.timestamp,
                         "location_language_device": "US / en / desktop",
-                        "observation_method": "mock_api",
+                        "observation_method": q.data.get("query_method", "mock_api"),
                         "aio_visible": q.data.get("aio_visible"),
                         "aio_conclusion": q.data.get("aio_conclusion"),
                         "paa": q.data.get("paa"),
@@ -358,7 +363,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"SERP-{opened + 1:02d}",
                     source_type="serp_page",
-                    fetch_method="mock_webfetch",
+                    fetch_method=data.get("fetch_method", "mock_webfetch"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform="Google SERP",
@@ -388,7 +393,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-CAND-{i + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_api",
+                    fetch_method=f"{community.name}_api" if community.name != "mock" else "mock_api",
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     platform=c["platform"],
@@ -419,7 +424,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-{n + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_reddit",
+                    fetch_method=data.get("fetch_method", "mock_reddit"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform=data["platform"],
@@ -450,7 +455,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-SP-{j + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_reddit",
+                    fetch_method=data.get("fetch_method", "mock_reddit"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform=data["platform"],
@@ -526,6 +531,7 @@ def run_outline(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) an outline revision.
 
@@ -559,7 +565,7 @@ def run_outline(
         prior = db.get_command_result(run_id, "outline", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         brief = json.loads(run["brief_snapshot"])
         facts = load_facts(db, brand["id"])
@@ -678,6 +684,7 @@ def run_draft(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) the article draft.
 
@@ -702,7 +709,7 @@ def run_draft(
         prior = db.get_command_result(run_id, "draft", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         outline = db.get_outline(run_id, run["approved_revision"])
         facts = load_facts(db, brand["id"])
@@ -749,6 +756,7 @@ def run_metadata(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) SEO metadata.
 
@@ -774,7 +782,7 @@ def run_metadata(
         prior = db.get_command_result(run_id, "metadata", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         outline = db.get_outline(run_id, run["approved_revision"])
         paa_pool: list[str] = []
@@ -1004,7 +1012,13 @@ def _copy_export_to(article_path: str, manifest_path: str, out_dir: str) -> None
 
 
 def run_retry(
-    db: Database, run: dict, brand: dict, step: str, policy: PolicyYaml, providers: dict | None = None
+    db: Database,
+    run: dict,
+    brand: dict,
+    step: str,
+    policy: PolicyYaml,
+    providers: dict | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Explicit, non-silent re-execution of a step (fresh idempotency key)."""
     resume = sm.RETRY_RESUME.get(step)
@@ -1016,17 +1030,40 @@ def run_retry(
         db.set_status(run["id"], sm.RESEARCHING, step="research", failure_reason=None)
         db.add_audit(run["id"], "retry.research", {"from": run["status"]})
         run["status"] = sm.RESEARCHING
-        return run_research(db, run, policy, providers=providers, key=f"run:{run['id']}:research:retry")
+        return run_research(
+            db,
+            run,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:research:retry",
+            provider_data_dir=provider_data_dir,
+        )
     if step == "outline":
         db.set_status(run["id"], sm.OUTLINE_PENDING, step="outline", failure_reason=None)
         db.add_audit(run["id"], "retry.outline", {"from": run["status"]})
         run["status"] = sm.OUTLINE_PENDING
-        return run_outline(db, run, brand, policy, providers=providers, key=f"run:{run['id']}:outline:retry")
+        return run_outline(
+            db,
+            run,
+            brand,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:outline:retry",
+            provider_data_dir=provider_data_dir,
+        )
     if step == "draft":
         db.set_status(run["id"], sm.DRAFTING, step="draft", failure_reason=None)
         db.add_audit(run["id"], "retry.draft", {"from": run["status"]})
         run["status"] = sm.DRAFTING
-        return run_draft(db, run, brand, policy, providers=providers, key=f"run:{run['id']}:draft:retry")
+        return run_draft(
+            db,
+            run,
+            brand,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:draft:retry",
+            provider_data_dir=provider_data_dir,
+        )
     raise UsageError(f"step '{step}' has no retry handler")
 
 
