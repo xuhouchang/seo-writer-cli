@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        python-version: ["3.12", "3.13"]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.1"
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --frozen
+      - run: uv run ruff check .
+      - run: uv run pytest tests/ -q
+      - run: uv run python -m compileall -q src
+      - run: uv lock --check
+      - run: uv build
+
+  release-bundle:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.12.1"
+          python-version: "3.13"
+      - run: uv sync --frozen
+      - run: uv run python scripts/release_smoke.py --launcher ./bin/seo-writer
+      - run: uv run python scripts/build_release_bundle.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: seo-writer-source-bundle
+          path: |
+            dist/seo-writer-*-source.tar.gz
+            dist/seo-writer-*-source.tar.gz.sha256
+          if-no-files-found: error
+
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: gitleaks/gitleaks-action@v2
+        with:
+          args: detect --no-git --source . --no-banner --redact --exit-code 1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

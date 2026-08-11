@@ -20,9 +20,9 @@ interfaces (see `docs/MIGRATION.md`).
 
 ## Why this shape
 
-- **The CLI is the product.** No SaaS, no web UI, no payment flow, no CMS
-  publishing in Phase 1. The artifact is a directory of `article.md` +
-  `manifest.json` you can hand to an editor or a CMS.
+- **The Skill + local CLI is the product.** The Skill governs the Agent
+  workflow; the CLI enforces state, approval, claims, audit and export. There
+  is no SaaS, web UI, payment flow or CMS publishing in Phase 1.
 - **Research gate first.** An outline is never generated before the gate
   passes (3 queries, 5 opened SERP pages, 10 opened community threads across
   4 subreddits, second platform or documented insufficiency — floors equal to
@@ -42,9 +42,10 @@ interfaces (see `docs/MIGRATION.md`).
 ## Quick start
 
 ```bash
-# install (uv-managed)
+# source checkout or extracted release bundle (uv-managed; no PyPI)
 cd seo-writer
-uv sync
+uv sync --frozen
+./bin/seo-writer --version
 
 # smoke-test everything offline
 uv run pytest tests/ -q
@@ -55,7 +56,7 @@ Create a brand and run one article end to end:
 
 ```bash
 export SEO_WRITER_DATA_DIR=~/.seo-writer     # optional; default is ~/.seo-writer
-alias sw="uv run seo-writer --data-dir $SEO_WRITER_DATA_DIR"
+alias sw="./bin/seo-writer --data-dir $SEO_WRITER_DATA_DIR"
 
 sw init
 sw brand create acme
@@ -79,6 +80,10 @@ sw run export <run-id> --format markdown
 Everything supports `--json` for scripting. Exit codes: `0` success,
 `1` business failure (gate/approval/validation — JSON error on stderr),
 `2` usage error.
+
+For the curated source bundle, installation, upgrade, rollback and release
+gates, see [`docs/RELEASE.md`](docs/RELEASE.md). SEO Writer is not published to
+PyPI.
 
 ## CLI reference
 
@@ -286,8 +291,8 @@ tests/                   # AC1–AC10 + validator units, fixture-driven mocks
 
 ## Roadmap
 
-- **Phase 1 (current)** — offline deterministic production pipeline
-  (mock providers, audit/approval/claim-safety machinery, 75 tests) plus
+- **Phase 1 (current public beta)** — offline deterministic governance pipeline
+  (mock providers, audit/approval/claim-safety machinery) plus
   onboarding: site memory, website crawl + baseline SEO audit, confirmed
   feature summary, provider credential setup with live verification.
 - **Phase 2 — bring your own data sources.** The 5 provider roles get real
@@ -295,7 +300,7 @@ tests/                   # AC1–AC10 + validator units, fixture-driven mocks
   configure with *your* keys via `policy.yaml` + environment variables. The
   mocks remain the compatibility contract for tests. See
   `docs/MIGRATION.md` for the per-role checklist.
-- **Phase 3 — commercial packaging** (license, usage metering) only when
+- **Phase 3 — commercial packaging** (usage metering) only when
   there is a user base to justify it. The codebase is built so a hosted
   gateway can be added without changing the CLI contract.
 

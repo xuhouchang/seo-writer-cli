@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from typer import _click as click
 
 from . import RULES_VERSION, __version__, gsc, onboard, services
 from .config import Workspace, ensure_workspace, load_yaml_model, resolve_data_dir, resolve_workspace
@@ -30,7 +31,7 @@ from .facts import import_facts
 from .models import FactsYaml, PolicyYaml
 from .policy import import_policy
 
-app = typer.Typer(help="Local-first, gate-governed SEO content production CLI.", no_args_is_help=True)
+app = typer.Typer(help="Local-first, gate-governed SEO content production CLI.", invoke_without_command=True)
 brand_app = typer.Typer(help="Brand management.", no_args_is_help=True)
 brand_facts_app = typer.Typer(help="Per-brand fact ledger.", no_args_is_help=True)
 brand_policy_app = typer.Typer(help="Per-brand run policy.", no_args_is_help=True)
@@ -41,7 +42,6 @@ onboard_app = typer.Typer(help="New-brand onboarding (site memory, crawl, audit,
 providers_app = typer.Typer(help="Provider credential configuration (DataForSEO, Reddit).",
     no_args_is_help=True,)
 gsc_app = typer.Typer(help="Google Search Console closed loop (measure → iterate).", no_args_is_help=True)
-sitemap_app = typer.Typer(help="Sitemap management.", no_args_is_help=True)
 
 app.add_typer(brand_app, name="brand")
 brand_app.add_typer(brand_facts_app, name="facts")
@@ -50,7 +50,6 @@ app.add_typer(project_app, name="project")
 app.add_typer(run_app, name="run")
 app.add_typer(onboard_app, name="onboard")
 app.add_typer(providers_app, name="providers")
-gsc_app.add_typer(sitemap_app, name="sitemap")
 app.add_typer(gsc_app, name="gsc")
 
 
@@ -65,6 +64,7 @@ state = Ctx()
 
 @app.callback()
 def _main(
+    ctx: typer.Context,
     data_dir: Annotated[str | None, typer.Option(help="Data directory (default ~/.seo-writer)")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace", "-w", help="Workspace slug")] = None,
     json_out: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
@@ -76,6 +76,8 @@ def _main(
     state.data_dir = resolve_data_dir(data_dir)
     state.workspace = resolve_workspace(workspace)
     state.json = json_out
+    if ctx.invoked_subcommand is None and not version:
+        typer.echo(ctx.get_help())
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +148,20 @@ def _require_both(brand: str | None, project: str | None) -> None:
         raise UsageError("--brand and --project must be given together")
 
 
+def main() -> int:
+    """Run Typer while preserving JSON output for command-line usage errors."""
+    try:
+        result = app(standalone_mode=False)
+    except click.ClickException as exc:
+        if "--json" in sys.argv[1:]:
+            payload = {"error": "UsageError", "message": exc.format_message()}
+            print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+        else:
+            exc.show()
+        return int(exc.exit_code)
+    return result if isinstance(result, int) else 0
+
+
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
@@ -154,13 +170,16 @@ def _require_both(brand: str | None, project: str | None) -> None:
 @app.command()
 def init() -> None:
     """Create the workspace (database + objects directory) if missing."""
-    return _guard(
-        lambda: {
+    def run() -> dict[str, str]:
+        ws, db = _open()
+        db.close()
+        return {
             "workspace": str(state.data_dir / state.workspace),
             "rules_version": RULES_VERSION,
             "cli_version": __version__,
         }
-    )
+
+    return _guard(run)
 
 
 # ---------------------------------------------------------------------------
@@ -813,21 +832,6 @@ def gsc_inspect(
     return _guard(run)
 
 
-@sitemap_app.command("submit")
-def gsc_sitemap_submit(
-    brand: Annotated[str, typer.Option(help="Brand slug")],
-    url: Annotated[str, typer.Option(help="Sitemap URL")],
-) -> None:
-    """Submit a sitemap to Google Search Console."""
-
-    def run() -> dict:
-        ws, db = _open()
-        services.resolve_brand(db, brand)
-        return gsc.submit_sitemap(db, ws, brand, url)
-
-    return _guard(run)
-
-
 @gsc_app.command("import")
 def gsc_import(
     brand: Annotated[str, typer.Option(help="Brand slug")],
@@ -837,16 +841,13 @@ def gsc_import(
     property: Annotated[
         str | None, typer.Option(help="Property URL when the brand has no connected property")
     ] = None,
-    date: Annotated[
-        str | None, typer.Option(help="Data date YYYY-MM-DD when the CSV has no Date column")
-    ] = None,
 ) -> None:
-    """Import a GSC UI export CSV into gsc_queries (fallback path C, no credentials needed)."""
+    """Import a dated GSC UI export CSV (fallback path C, no credentials needed)."""
 
     def run() -> dict:
         ws, db = _open()
         services.resolve_brand(db, brand)
-        return gsc.import_gsc_csv(db, ws, brand, csv_file, property_url=property, data_date=date)
+        return gsc.import_gsc_csv(db, ws, brand, csv_file, property_url=property)
 
     return _guard(run)
 

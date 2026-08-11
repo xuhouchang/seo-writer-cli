@@ -20,7 +20,11 @@ This Skill is an instruction shell around the local Python CLI; it is not a
 second implementation. Use explicit workspace configuration and JSON output:
 
 ```bash
-export SW="seo-writer --data-dir ~/.seo-writer --workspace default --json"
+export SEO_WRITER_HOME="/absolute/path/to/seo-writer"
+sw() {
+  "$SEO_WRITER_HOME/bin/seo-writer" \
+    --data-dir ~/.seo-writer --workspace default --json "$@"
+}
 ```
 
 Read successful business results from stdout, errors from stderr, and preserve
@@ -32,16 +36,14 @@ OAuth or provider requests from the Skill test path.
 ## Workflow
 
 ```bash
-export SW="seo-writer --data-dir ~/.seo-writer --json"
-
 # 0. brand must exist first
-$SW brand create <brand>
+sw brand create <brand>
 
 # 1. record the customer's website (local memory file)
-$SW onboard site <brand> --url https://<customer-website>/   # -> status: draft
+sw onboard site <brand> --url https://<customer-website>/   # -> status: draft
 
 # 2. crawl + SEO audit (plain HTTP, no key, no LLM)
-$SW onboard fetch <brand>
+sw onboard fetch <brand>
 #    -> crawl/ artifacts under <data-dir>/<workspace>/brands/<brand>/site-crawl/
 #       index.html, content.txt (page text), seo-audit.yaml
 #    audit: ~100 rules across core/htmlval/social/content/a11y/images/url/
@@ -51,11 +53,11 @@ $SW onboard fetch <brand>
 
 # 3. YOU read content.txt, extract the product's features, write site.md
 #    (same dir as above), then the CUSTOMER reviews and confirms it
-$SW onboard confirm <brand> --approver "<customer-email>"    # -> status: confirmed
+sw onboard confirm <brand> --approver "<customer-email>"    # -> status: confirmed
 
 # 4. provider credentials (account-level): DataForSEO + Reddit
-$SW providers configure                                     # interactive prompts
-$SW providers status                                        # configured/verified?
+sw providers configure                                     # interactive prompts
+sw providers status                                        # configured/verified?
 ```
 
 ## Step 3 — feature extraction (your job)
@@ -134,8 +136,8 @@ customer machine). Three paths, A → B → C:
    queries, and URL performance against the `onboard fetch` audit baseline
    — feeds the customer-facing report.
 6. Optional extras: `gsc inspect --brand <brand> --url <url>` (indexing
-   status, uses the bound property), `gsc sitemap submit` (submit/refresh
-   sitemaps).
+   status, uses the bound property). SEO Writer is read-only and does not
+   submit or modify Sitemaps.
 
 Credentials (refresh token, client json) live only under
 `<data-dir>/.../gsc/<brand>/`, chmod-600; `gsc status` shows binding and sync

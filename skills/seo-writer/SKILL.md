@@ -39,7 +39,11 @@ This Skill is the product shell; the Python CLI is the execution runtime. Use an
 explicit data directory and request machine-readable output:
 
 ```bash
-export SW="seo-writer --data-dir ~/.seo-writer --workspace default --json"
+export SEO_WRITER_HOME="/absolute/path/to/seo-writer"
+sw() {
+  "$SEO_WRITER_HOME/bin/seo-writer" \
+    --data-dir ~/.seo-writer --workspace default --json "$@"
+}
 ```
 
 On success, consume JSON from stdout. On failure, inspect JSON on stderr and
@@ -55,11 +59,11 @@ requests, or model weights in fixtures.
 
 ```bash
 # one-time per machine: install + init + import brand facts/policy
-seo-writer --data-dir ~/.seo-writer init
-seo-writer brand create <brand>
-seo-writer project create <brand> <project>
-seo-writer brand facts import <brand> <path/to/facts.yaml>
-seo-writer brand policy import <brand> <path/to/policy.yaml>
+sw init
+sw brand create <brand>
+sw project create <brand> <project>
+sw brand facts import <brand> <path/to/facts.yaml>
+sw brand policy import <brand> <path/to/policy.yaml>
 ```
 
 The brand facts ledger (`facts.yaml`) is the single source of truth for what
@@ -68,33 +72,31 @@ may be claimed. Read it (`brand facts show`) before writing any copy.
 ## Standard workflow
 
 ```bash
-export SW="seo-writer --data-dir ~/.seo-writer --json"
-
 # 1. create the run from a topic brief
-$SW run create <brand> <project> --brief <topic.yaml>          # -> run_id
+sw run create <brand> <project> --brief <topic.yaml>          # -> run_id
 
 # 2. research + gate
-$SW run research <run_id>                                      # evidence_rows: N
-$SW run validate-research <run_id>                             # gate; exit 1 if gaps
+sw run research <run_id>                                      # evidence_rows: N
+sw run validate-research <run_id>                             # gate; exit 1 if gaps
 
 # 3. YOU write the outline (structure requirements below) and import it
 #    (same file re-imported = idempotent; edited file = new revision)
-$SW run outline <run_id> --from-file outline.md                # -> outline_revision: 1
+sw run outline <run_id> --from-file outline.md                # -> outline_revision: 1
 
 # 4. explicit human approval (the approver is audited)
-$SW run approve <run_id> --revision 1 --approver "editor@example.com"
+sw run approve <run_id> --revision 1 --approver "editor@example.com"
 
 # 5. YOU write the draft (claim rules below) and import it
-$SW run draft <run_id> --from-file draft.md
+sw run draft <run_id> --from-file draft.md
 
 # 6. YOU write the metadata (length caps below) and import it
-$SW run metadata <run_id> --from-file metadata.yaml
+sw run metadata <run_id> --from-file metadata.yaml
 
 # 7. full validation — claims, structure, lengths, approval
-$SW run validate <run_id>                                      # -> completed
+sw run validate <run_id>                                      # -> completed
 
 # 8. export: article.md + manifest.json (full traceability)
-$SW run export <run_id> --format markdown [--out-dir ./out]
+sw run export <run_id> --format markdown [--out-dir ./out]
 ```
 
 ## Content requirements (what the CLI enforces)
