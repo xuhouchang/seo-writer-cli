@@ -10,19 +10,18 @@ substantive product claim in the final copy is traceable to an approved entry
 in the brand's facts ledger, and every blocking rule is enforced with an audit
 trail — never silently downgraded.
 
-Phase 1 MVP is **offline and deterministic** for article production: all five
-provider roles (keyword / SERP / web-fetch / community / LLM) run on bundled
-mock profiles — no paid API, no API keys. The only network touchpoint is
-onboarding (`onboard fetch` crawls the customer's own website over plain
-HTTP; `providers verify` pings the customer's own DataForSEO/Reddit
-credentials). Real provider roles are a Phase 2 swap behind the same
-interfaces (see `docs/MIGRATION.md`).
+The public product is an Agent Skill plus a local Python CLI. Production
+research uses user-configured DataForSEO, Reddit and plain HTTP page fetching;
+the bundled mock providers are only for tests and demonstrations. The Skill's
+agent-authored `--from-file` workflow does not require a CLI LLM key. Real
+provider calls happen only after the user manually configures and verifies
+their own accounts in the data directory.
 
 ## Why this shape
 
-- **The CLI is the product.** No SaaS, no web UI, no payment flow, no CMS
-  publishing in Phase 1. The artifact is a directory of `article.md` +
-  `manifest.json` you can hand to an editor or a CMS.
+- **The Skill + local CLI is the product.** The Skill governs the Agent
+  workflow; the CLI enforces state, approval, claims, audit and export. There
+  is no SaaS, web UI, payment flow or CMS publishing in this release.
 - **Research gate first.** An outline is never generated before the gate
   passes (3 queries, 5 opened SERP pages, 10 opened community threads across
   4 subreddits, second platform or documented insufficiency — floors equal to
@@ -42,9 +41,10 @@ interfaces (see `docs/MIGRATION.md`).
 ## Quick start
 
 ```bash
-# install (uv-managed)
+# source checkout or extracted release bundle (uv-managed; no PyPI)
 cd seo-writer
-uv sync
+uv sync --frozen
+./bin/seo-writer --version
 
 # smoke-test everything offline
 uv run pytest tests/ -q
@@ -55,7 +55,7 @@ Create a brand and run one article end to end:
 
 ```bash
 export SEO_WRITER_DATA_DIR=~/.seo-writer     # optional; default is ~/.seo-writer
-alias sw="uv run seo-writer --data-dir $SEO_WRITER_DATA_DIR"
+alias sw="./bin/seo-writer --data-dir $SEO_WRITER_DATA_DIR"
 
 sw init
 sw brand create acme
@@ -64,6 +64,12 @@ sw project create acme blog
 # import the *example* pack — replace with your customer's real facts first
 sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
 sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
+
+# production: configure the user's own provider accounts before research
+sw providers configure --name dataforseo
+sw providers configure --name reddit
+sw providers status
+# import a policy selecting dataforseo + reddit + http (see the template)
 
 sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
 sw run research <run-id>
@@ -79,6 +85,10 @@ sw run export <run-id> --format markdown
 Everything supports `--json` for scripting. Exit codes: `0` success,
 `1` business failure (gate/approval/validation — JSON error on stderr),
 `2` usage error.
+
+For the curated source bundle, installation, upgrade, rollback and release
+gates, see [`docs/RELEASE.md`](docs/RELEASE.md). SEO Writer is not published to
+PyPI.
 
 ## CLI reference
 
@@ -113,7 +123,36 @@ seo-writer onboard status <brand>
 seo-writer providers configure [--name dataforseo|reddit]
 seo-writer providers verify [--name dataforseo|reddit]
 seo-writer providers status
+seo-writer gsc setup <brand>                          # credential state + guidance
+seo-writer gsc auth <brand> [--no-launch-browser] [--gcloud]
+seo-writer gsc sites <brand>
+seo-writer gsc connect <brand> --property <url>       # bind property to brand
+seo-writer gsc pull <brand> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--force] # incremental, idempotent
+seo-writer gsc inspect --brand <brand> --url <url>  # uses the bound property
+seo-writer gsc import <brand> <gsc.csv>                         # dated GSC UI export
+seo-writer gsc insights <brand> [--window 28]
+seo-writer --json gsc status --brand <brand>   # --json is a global flag
 ```
+
+GSC integration overview (zero third-party runtime deps, stdlib only):
+
+- **`setup`** — three auth paths: A. gcloud ADC (preferred), B. own OAuth
+  client json (`import` via `setup` prompt, PKCE loopback flow via `auth`),
+  C. GSC UI CSV export fallback via `import`.
+- **`pull`** — Search Analytics (date+query / date+page dimensions),
+  25,000-row startRow pagination, incremental upsert skipping synced dates
+  (repeat runs make **zero** API calls; `--force` re-pulls), 429/5xx
+  exponential backoff (1s→60s + jitter) and a 1,200 QPM rate limiter.
+- **`insights`** — high-impressions/low-CTR queries, rising queries,
+  URL performance vs the `onboard fetch` audit baseline.
+- GSC is read-only: SEO Writer can inspect Search Console data and read local
+  or existing sitemap information, but never submits or changes a Sitemap.
+  Search Analytics exposes the most important rows subject to Google's
+  internal limits; results are not a complete keyword database. CSV fallback
+  imports must contain a real `Date` column and are labeled `csv-import`.
+- Credentials and GSC data stay on the customer machine
+  (`--data-dir/.../gsc/<brand>/`, token files chmod-600); nothing is sent to
+  third parties. See the GSC sections in `docs/ARCHITECTURE.md` for the design.
 
 Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
 
@@ -127,22 +166,56 @@ New-brand setup is a four-step journey; a ready-made agent wrapper lives in
    `--url` is omitted.
 2. **`onboard fetch <brand>`** — crawl the site over plain HTTP (no key, no
    LLM), keep `index.html` + `content.txt` + `seo-audit.yaml` under
-   `brands/<slug>/site-crawl/`, and run a baseline SEO audit (title / meta
-   description / H1 / image alt / canonical / robots / JSON-LD / size / speed,
-   scored 0–100).
-3. **`onboard confirm <brand>`** — an agent (or you) writes the product's
-   feature summary to `brands/<slug>/site.md` from the crawled text; the
-   customer reviews and edits it; `confirm` stamps who approved and when.
+   `brands/<slug>/site-crawl/`, and run a category-scoped SEO audit scored
+   0–100. The rule set is a Python re-implementation of the static-checkable
+   subset of the MIT-licensed
+   [seo-skills/seo-audit-skill](https://github.com/seo-skills/seo-audit-skill)
+   (251 rules / 20 categories upstream; ~100 rules embedded here — see
+   `src/seo_writer/seo_rules.py` and `NOTICE`): core / htmlval / social /
+   content / a11y / images / url / mobile / i18n / security / technical /
+   crawl / redirect / schema / eeat / geo / legal / perf, plus robots.txt +
+   sitemap.xml checks fetched alongside the page (absence tolerated, reported
+   as findings). Each rule is
+   a pure standard-library check — no third-party runtime dependencies — with
+   `pass(100)/warn(50)/fail(0)` semantics mapped to
+   `ok(-0)/info(-2)/warning(-10)/error(-30)` and
+   `score = max(0, 100 − errors×30 − warnings×10 − infos×2)`. Every
+   `seo-audit.yaml` carries a `rubric` field naming the upstream source.
+3. **`onboard confirm <brand>`** — an agent (or you) writes an evidence-backed
+   product brief to `brands/<slug>/site.md` from the crawled text. It must
+   cover target audience; FAB (Feature, Advantage, Benefit); limitations and
+   non-capabilities; competitor context; unsupported claims; and open
+   questions. The customer reviews and edits it; `confirm` rejects missing or
+   empty sections, then stamps who approved and when.
 4. **`providers configure`** — interactive DataForSEO (login/password) and
    Reddit (client_id/client_secret) setup. Secrets go to a chmod-600
    `.secrets.yaml` in the data dir — never in git, never echoed — and every
    provider is verified live on configure (DataForSEO ping, Reddit OAuth).
    Env defaults are offered (DATAFORSEO_LOGIN/PASSWORD, REDDIT_CLIENT_ID/
-   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`.
+   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`. Production research
+   refuses to silently fall back to mock data when these providers are absent.
 
-The confirmed feature summary seeds `facts.yaml` for the production pipeline.
-Configured-but-unverified credentials block nothing yet — the real
-search/community providers are a Phase 2 swap.
+The confirmed product evidence brief seeds `facts.yaml` for the production pipeline.
+The real search/community providers are selected by `policy.yaml`; configure
+and verify them before `run research`.
+
+### Content gap and local HTML review
+
+After the research gate passes, import a current-run evidence-backed content
+map and render the local review reports:
+
+```bash
+seo-writer --data-dir <dir> --workspace <workspace> --json run gap-map <run-id> --from-file content-map.json
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view content-map
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view opportunities
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view outline
+seo-writer --data-dir <dir> --workspace <workspace> --json run import-review <run-id> outline-review.json
+seo-writer --data-dir <dir> --workspace <workspace> --json run export <run-id> --format html
+```
+
+HTML is a self-contained customer review surface. JSON, Markdown, and YAML
+remain canonical. Coverage and opportunity graphics render only when enough
+deterministic data exists; every graphic has a table or text fallback.
 
 ## Agent workflow — no LLM API needed
 
@@ -187,8 +260,9 @@ previous approval (re-approve).
   costs, audits. **Objects** (outline revisions, draft, exported manifest)
   at `<data-dir>/<workspace>/objects/<run-id>/`.
 
-Config holds provider *profile references* only; secrets never live in YAML —
-Phase 2 real providers read them from env (`docs/MIGRATION.md`).
+Config holds provider *profile references* only; secrets never live in YAML.
+Production adapters read credentials from the user-owned data directory
+(`docs/MIGRATION.md`).
 
 ## Evidence typing
 
@@ -234,8 +308,9 @@ src/seo_writer/
   policy.py              # policy import + validation against Skill floors
   ids.py                 # run ids, sha256, idempotency keys
   onboard.py             # onboarding: site memory, crawl + SEO audit, provider config
+  seo_rules.py           # SEO audit rules (~100, seo-audit-skill MIT subset; see NOTICE)
   validators/            # research_gate, claim_safety (pure, unit-testable)
-  providers/             # ProviderResult + mock keyword/serp/webfetch/community/llm
+  providers/             # ProviderResult + real adapters and test-only mocks
 docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
 skills/                  # seo-writer (production) + seo-writer-onboarding (brand setup)
 examples/brand-packs/    # generic-anonymous example pack (no customer facts)
@@ -244,26 +319,24 @@ tests/                   # AC1–AC10 + validator units, fixture-driven mocks
 
 ## Roadmap
 
-- **Phase 1 (current)** — offline deterministic production pipeline
-  (mock providers, audit/approval/claim-safety machinery, 75 tests) plus
-  onboarding: site memory, website crawl + baseline SEO audit, confirmed
-  feature summary, provider credential setup with live verification.
-- **Phase 2 — bring your own data sources.** The 5 provider roles get real
-  implementations (DataForSEO, SERP APIs, Reddit, OpenRouter/LLM) that *you*
-  configure with *your* keys via `policy.yaml` + environment variables. The
-  mocks remain the compatibility contract for tests. See
-  `docs/MIGRATION.md` for the per-role checklist.
-- **Phase 3 — commercial packaging** (license, usage metering) only when
+- **Current public beta** — Skill onboarding, user-configured DataForSEO and
+  Reddit research, HTTP page evidence, GSC customer-data workflows, and the
+  local governance pipeline. Mocks remain the compatibility contract for
+  tests and demos.
+- **Future** — optional direct LLM provider support and additional search or
+  community adapters. The agent-authored file workflow is already supported.
+- **Phase 3 — commercial packaging** (usage metering) only when
   there is a user base to justify it. The codebase is built so a hosted
   gateway can be added without changing the CLI contract.
 
-## Security posture (Phase 1)
+## Security posture
 
 - No secrets, keys, or credentials in the repo — ever.
 - `~/.seo-writer` workspace is user-owned and gitignored.
 - Facts/claims are **project-isolated per brand**; the example pack is
   deliberately anonymous. Never commit a customer's real facts ledger.
-- Real providers in Phase 2: interfaces and config schemas only, secrets from
-  env (`docs/MIGRATION.md` for the full checklist).
+- Real provider credentials are entered by the customer and stored only in the
+  chmod-600 data directory; they are never in policy YAML, artifacts, logs or
+  this repository. See `docs/MIGRATION.md` for provider details.
 - Model weights / provider artifacts never live in the repo (see global
   `~/.cache/models/` convention in the developer environment rules).

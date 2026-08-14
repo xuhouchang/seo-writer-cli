@@ -1,9 +1,10 @@
 # seo-writer — Architecture
 
-Phase 1 MVP: local-first, offline, deterministic. This document explains the
-component layout, the state machine, the approval model, idempotency, and the
-audit/cost model. `docs/AUDIT.md` covers the audit guarantees in depth;
-`docs/MIGRATION.md` covers the Phase 2 path to real providers.
+Public beta: local-first, Skill-driven and research-gated. Production research
+uses user-configured adapters; deterministic mocks are reserved for tests and
+demos. This document explains the component layout, state machine, approval
+model, idempotency, and audit/cost model. `docs/AUDIT.md` covers audit
+guarantees; `docs/MIGRATION.md` covers provider configuration.
 
 ## 1. Layer overview
 
@@ -13,6 +14,7 @@ audit/cost model. `docs/AUDIT.md` covers the audit guarantees in depth;
 ├─────────────────────────────────────────────────────────────┤
 │ services.py  pipeline steps + approval + idempotency        │
 │ state_machine.py  transition table + step authorization     │
+│ workflow.py  canonical review artifacts + deterministic HTML│
 ├───────────────┬──────────────┬──────────────────────────────┤
 │ db.py         │ facts/policy │ validators/                  │
 │ SQLite        │ import +     │ research_gate (pure)         │
@@ -21,8 +23,8 @@ audit/cost model. `docs/AUDIT.md` covers the audit guarantees in depth;
 │  audits,      │ invalidation │                              │
 │  approvals)   │              │                              │
 ├───────────────┴──────────────┴──────────────────────────────┤
-│ providers/  ProviderResult · mock keyword/serp/webfetch/    │
-│             community/llm (fixture-driven, deterministic)   │
+│ providers/  ProviderResult · real adapters + test mocks    │
+│             DataForSEO / Reddit / HTTP / agent-from-file   │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -66,6 +68,9 @@ Notable authorizations (these carry product meaning):
 | `research` | created, researching, gate_passed, outline_pending, blocked | re-research demotes/removes stale evidence |
 | `validate_research` | researching, gate_passed, blocked | gate can be re-evaluated after remediation |
 | `outline` | gate_passed, outline_pending, approved, drafting, completed, blocked | re-generating an outline is allowed but **invalidates approval** (AC6) |
+| `gap_map` | researching, gate_passed, outline_pending, approved | validates current-run evidence and invalidates an existing approval |
+| `render` | every state except created | read-only deterministic HTML rendering |
+| `import_review` | outline_pending, approved | stale-safe import creates a new outline revision |
 | `approve` | outline_pending, approved | re-approval binds the *latest* facts snapshot |
 | `draft` | outline_pending, approved, drafting, completed, blocked | refusal on unapproved outline raises `ApprovalRequiredError` before any LLM call (AC4) |
 | `metadata` | outline_pending, drafting, completed, blocked | same approval guard as draft |
@@ -170,6 +175,11 @@ This is the traceability contract: any exported article can be walked back
 to the facts, outline revision, approval, evidence and cost total that
 produced it (AC10).
 
+The additive HTML format writes `article.html` under `export/html/`. The
+manifest records hashes for the article, content map, outline sidecar, and
+outline review when those artifacts exist. Customer-facing HTML never renders
+confidential review content.
+
 ## 8. Directory layout
 
 ```
@@ -182,6 +192,12 @@ produced it (AC10).
             ├── outlines/rev-N.md
             ├── draft.md
             ├── metadata.json
+            ├── gap/content-map.json
+            ├── gap/content-map.html
+            ├── gap/opportunity-map.html
+            ├── outlines/rev-N.json
+            ├── outlines/rev-N.html
+            ├── reviews/outline-rev-N.review.json
             └── export/markdown/
                 ├── article.md
                 └── manifest.json
@@ -219,4 +235,5 @@ src/seo_writer/
     mock_community.py  thread rows across subreddits + second platform
     mock_llm.py        outline/draft/metadata templates; claim-safe by
                        construction; inject fixtures for failure-path tests
+    real.py             user-configured DataForSEO, Reddit and HTTP adapters
 ```

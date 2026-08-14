@@ -33,15 +33,47 @@ approves, validates and exports your work.
    file short-circuits. Editing the file and re-importing creates a new
    outline revision and invalidates the previous approval — re-approve.
 
+## CLI shell contract
+
+This Skill is the product shell; the Python CLI is the execution runtime. Use an
+explicit data directory and request machine-readable output:
+
+```bash
+export SEO_WRITER_HOME="/absolute/path/to/seo-writer"
+sw() {
+  "$SEO_WRITER_HOME/bin/seo-writer" \
+    --data-dir ~/.seo-writer --workspace default --json "$@"
+}
+```
+
+On success, consume JSON from stdout. On failure, inspect JSON on stderr and
+honour the exit code: `0` success, `1` business/validation failure, `2`
+parameter or usage error. Do not treat a non-zero exit code as a successful
+step, and do not duplicate the CLI's business logic in the Skill.
+
+For tests or demos, always replace `~/.seo-writer` with a temporary data
+directory. Never use real customer data, OAuth, provider credentials, paid
+requests, or model weights in fixtures.
+
 ## Prerequisites
 
 ```bash
 # one-time per machine: install + init + import brand facts/policy
-seo-writer --data-dir ~/.seo-writer init
-seo-writer brand create <brand>
-seo-writer project create <brand> <project>
-seo-writer brand facts import <brand> <path/to/facts.yaml>
-seo-writer brand policy import <brand> <path/to/policy.yaml>
+sw init
+sw brand create <brand>
+sw project create <brand> <project>
+sw brand facts import <brand> <path/to/facts.yaml>
+sw brand policy import <brand> <path/to/policy.yaml>
+
+# production research prerequisite: the user must configure these manually
+sw providers configure --name dataforseo
+sw providers configure --name reddit
+sw providers status
+
+Use a policy selecting `dataforseo` for keyword/SERP, `reddit` for community,
+and `http` for opened pages. Mock policies are for tests and synthetic demos
+only. If a production provider is missing or unverified, stop and ask the user
+to complete onboarding; never substitute mock evidence.
 ```
 
 The brand facts ledger (`facts.yaml`) is the single source of truth for what
@@ -50,34 +82,58 @@ may be claimed. Read it (`brand facts show`) before writing any copy.
 ## Standard workflow
 
 ```bash
-export SW="seo-writer --data-dir ~/.seo-writer --json"
-
 # 1. create the run from a topic brief
-$SW run create <brand> <project> --brief <topic.yaml>          # -> run_id
+sw run create <brand> <project> --brief <topic.yaml>          # -> run_id
 
 # 2. research + gate
-$SW run research <run_id>                                      # evidence_rows: N
-$SW run validate-research <run_id>                             # gate; exit 1 if gaps
+sw run research <run_id>                                      # evidence_rows: N
+sw run validate-research <run_id>                             # gate; exit 1 if gaps
+
+# 2b. YOU create an evidence-backed content map, then import and render it
+sw run gap-map <run_id> --from-file content-map.json
+sw run render <run_id> --view content-map
+sw run render <run_id> --view opportunities
 
 # 3. YOU write the outline (structure requirements below) and import it
 #    (same file re-imported = idempotent; edited file = new revision)
-$SW run outline <run_id> --from-file outline.md                # -> outline_revision: 1
+sw run outline <run_id> --from-file outline.md                # -> outline_revision: 1
+
+# 3b. render the section-bound viewpoint review; import the downloaded JSON
+sw run render <run_id> --view outline
+sw run import-review <run_id> <outline-review.json>           # -> new revision
 
 # 4. explicit human approval (the approver is audited)
-$SW run approve <run_id> --revision 1 --approver "editor@example.com"
+sw run approve <run_id> --revision 1 --approver "editor@example.com"
 
 # 5. YOU write the draft (claim rules below) and import it
-$SW run draft <run_id> --from-file draft.md
+sw run draft <run_id> --from-file draft.md
 
 # 6. YOU write the metadata (length caps below) and import it
-$SW run metadata <run_id> --from-file metadata.yaml
+sw run metadata <run_id> --from-file metadata.yaml
 
 # 7. full validation — claims, structure, lengths, approval
-$SW run validate <run_id>                                      # -> completed
+sw run validate <run_id>                                      # -> completed
 
 # 8. export: article.md + manifest.json (full traceability)
-$SW run export <run_id> --format markdown [--out-dir ./out]
+sw run export <run_id> --format markdown [--out-dir ./out]
+sw run export <run_id> --format html [--out-dir ./out]
 ```
+
+## Content map and outline review
+
+The content map uses only current-run evidence ids and classifies gaps as
+`topic`, `intent`, `format`, or `depth`. A blank competitor area is not an
+opportunity unless buyer evidence and sampled competitor evidence both exist.
+Coverage uses the deterministic 0-3 rubric. Opportunity cards keep Market Gap
+Confidence, Brand Fit, and Differentiation Readiness separate; do not invent a
+combined demand score.
+
+Behavioural questions are allowed only after an outline/framework exists.
+Every contextual prompt must carry a `section_id` or `viewpoint_id`, and each
+Viewpoint Card has at most two high-value prompts. Review choices are Confirm,
+Confirm with edits, Reject, Ask an internal expert, Add an example, and True,
+but confidential. Confidential input never enters customer-facing HTML or the
+final article export.
 
 ## Content requirements (what the CLI enforces)
 
@@ -125,6 +181,8 @@ image_alt_texts: ["…"]       # each ≤ 125 chars
 |---|---|---|
 | `validate-research` exit 1 | gate gaps (queries/SERP/threads/subreddits/second platform) | run research again / add evidence; re-run gate |
 | `outline --from-file` exit 1 | structure markers missing or empty file | add the required `##`/`###` sections |
+| `gap-map` exit 1 | malformed map or unknown evidence id | use only evidence from `run evidence`; fix buyer and competitor refs |
+| `import-review` exit 1 | stale revision/input hash or unknown viewpoint | render the latest outline and import a fresh download |
 | `draft` / `metadata` exit 1 | no approval or approval invalidated (facts/policy changed) | `run approve` again; re-check `run status` |
 | `validate` exit 1 | claim-safety / length failures | fix the named sentences in draft.md / metadata.yaml, re-import with the **same** or **new** file as appropriate, re-validate |
 | `run.blocked` | provider failure or validation failure | `run retry --step <step>` after fixing the cause |

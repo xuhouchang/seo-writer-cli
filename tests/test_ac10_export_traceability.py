@@ -97,11 +97,9 @@ def test_ac10_export_requires_completed_and_is_idempotent(ws, db, tmp_path) -> N
     assert audits_after == audits_before == 1
     assert Path(out2["article"]).exists()
 
-    # unsupported format is a usage error
-    from seo_writer.errors import UsageError
-
-    with pytest.raises(UsageError):
-        services.run_export(ws, db, run, brand, "html")
+    # HTML is an additive export format and remains independently idempotent.
+    html = services.run_export(ws, db, run, brand, "html")
+    assert Path(html["article"]).name == "article.html"
 
     # out_dir copy lands article + manifest at the requested path
     target = tmp_path / "out"

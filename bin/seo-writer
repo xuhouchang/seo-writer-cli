@@ -1,0 +1,18 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+PROJECT_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+
+if ! command -v uv >/dev/null 2>&1; then
+  echo "error: uv is required to run SEO Writer (https://docs.astral.sh/uv/)" >&2
+  exit 127
+fi
+
+# The Skill host may itself run inside another uv/virtual environment. Prevent
+# that host environment from adding warnings to stderr or changing this locked
+# project's runtime selection; stderr must remain valid JSON under --json.
+unset VIRTUAL_ENV
+unset UV_RUN_RECURSION_DEPTH
+
+exec uv run --frozen --project "$PROJECT_ROOT" seo-writer "$@"

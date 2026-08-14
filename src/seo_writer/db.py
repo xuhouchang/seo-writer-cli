@@ -159,6 +159,51 @@ CREATE TABLE IF NOT EXISTS brand_policies (
   policy_hash TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gsc_properties (
+  brand TEXT NOT NULL,
+  property_url TEXT NOT NULL,
+  auth_path TEXT NOT NULL,
+  client_json_path TEXT,
+  status TEXT NOT NULL,
+  last_synced_at TEXT,
+  PRIMARY KEY (brand)
+);
+
+CREATE TABLE IF NOT EXISTS gsc_queries (
+  property_url TEXT NOT NULL,
+  data_date TEXT NOT NULL,
+  query TEXT NOT NULL,
+  page TEXT NOT NULL DEFAULT '',
+  device TEXT NOT NULL DEFAULT '',
+  country TEXT NOT NULL DEFAULT '',
+  search_type TEXT NOT NULL DEFAULT 'web',
+  clicks INTEGER NOT NULL DEFAULT 0,
+  impressions INTEGER NOT NULL DEFAULT 0,
+  ctr REAL NOT NULL DEFAULT 0,
+  position REAL NOT NULL DEFAULT 0,
+  pulled_at TEXT NOT NULL,
+  PRIMARY KEY (property_url, data_date, query, page, device, country, search_type)
+);
+CREATE INDEX IF NOT EXISTS idx_gsc_queries_prop_date ON gsc_queries(property_url, data_date);
+
+CREATE TABLE IF NOT EXISTS gsc_inspections (
+  property_url TEXT NOT NULL,
+  url TEXT NOT NULL,
+  inspected_at TEXT NOT NULL,
+  index_status TEXT,
+  mobile_usable INTEGER,
+  last_crawl TEXT,
+  PRIMARY KEY (property_url, url)
+);
+
+CREATE TABLE IF NOT EXISTS gsc_pull_state (
+  property_url TEXT NOT NULL,
+  dimension TEXT NOT NULL,
+  data_date TEXT NOT NULL,
+  completed_at TEXT NOT NULL,
+  PRIMARY KEY (property_url, dimension, data_date)
+);
 """
 
 
@@ -174,6 +219,50 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.executescript(SCHEMA)
         self._conn.commit()
+        self._migrate_gsc_queries()
+
+    def _migrate_gsc_queries(self) -> None:
+        """Rebuild the legacy nullable-key table and deterministically dedupe it."""
+        columns = self._conn.execute("PRAGMA table_info(gsc_queries)").fetchall()
+        nullable = {row[1] for row in columns if row[1] in {"page", "device", "country"} and not row[3]}
+        if not nullable:
+            return
+        self._conn.execute("BEGIN")
+        try:
+            self._conn.execute("DROP INDEX IF EXISTS idx_gsc_queries_prop_date")
+            self._conn.execute("ALTER TABLE gsc_queries RENAME TO gsc_queries_legacy")
+            self._conn.execute(
+                """CREATE TABLE gsc_queries (
+                  property_url TEXT NOT NULL, data_date TEXT NOT NULL, query TEXT NOT NULL,
+                  page TEXT NOT NULL DEFAULT '', device TEXT NOT NULL DEFAULT '',
+                  country TEXT NOT NULL DEFAULT '',
+                  search_type TEXT NOT NULL DEFAULT 'web', clicks INTEGER NOT NULL DEFAULT 0,
+                  impressions INTEGER NOT NULL DEFAULT 0, ctr REAL NOT NULL DEFAULT 0,
+                  position REAL NOT NULL DEFAULT 0, pulled_at TEXT NOT NULL,
+                  PRIMARY KEY (property_url, data_date, query, page, device, country, search_type)
+                )"""
+            )
+            self._conn.execute(
+                """INSERT INTO gsc_queries
+                SELECT property_url, data_date, query, COALESCE(page, ''), COALESCE(device, ''),
+                       COALESCE(country, ''), search_type, clicks, impressions, ctr, position, pulled_at
+                FROM (
+                  SELECT legacy.*, ROW_NUMBER() OVER (
+                    PARTITION BY property_url, data_date, query, COALESCE(page, ''),
+                                 COALESCE(device, ''), COALESCE(country, ''), search_type
+                    ORDER BY pulled_at DESC, rowid DESC
+                  ) AS rn
+                  FROM gsc_queries_legacy AS legacy
+                ) WHERE rn = 1"""
+            )
+            self._conn.execute(
+                "CREATE INDEX idx_gsc_queries_prop_date ON gsc_queries(property_url, data_date)"
+            )
+            self._conn.execute("DROP TABLE gsc_queries_legacy")
+            self._conn.commit()
+        except Exception:
+            self._conn.rollback()
+            raise
 
     def close(self) -> None:
         self._conn.close()
@@ -615,3 +704,124 @@ class Database:
             (brand_id, facts_hash),
         ).fetchall()
         return [dict(r) for r in rows]
+
+    # ---- GSC (Google Search Console) ----
+
+    def upsert_gsc_property(
+        self, brand: str, property_url: str, auth_path: str, client_json_path: str | None = None,
+        *, status: str = "connected",
+    ) -> dict[str, Any]:
+        self._conn.execute(
+            "INSERT INTO gsc_properties (brand, property_url, auth_path, client_json_path, status)"
+            " VALUES (?, ?, ?, ?, ?)"
+            " ON CONFLICT(brand) DO UPDATE SET property_url = excluded.property_url,"
+            " auth_path = excluded.auth_path, client_json_path = excluded.client_json_path,"
+            " status = excluded.status",
+            (brand, property_url, auth_path, client_json_path, status),
+        )
+        self._conn.commit()
+        return {
+            "brand": brand,
+            "property_url": property_url,
+            "auth_path": auth_path,
+            "client_json_path": client_json_path,
+            "status": status,
+        }
+
+    def get_gsc_property(self, brand: str) -> dict[str, Any] | None:
+        return _row_to_dict(
+            self._conn.execute("SELECT * FROM gsc_properties WHERE brand = ?", (brand,)).fetchone()
+        )
+
+    def update_gsc_property_synced(self, brand: str, at: str) -> None:
+        self._conn.execute(
+            "UPDATE gsc_properties SET last_synced_at = ?,"
+            " status = CASE WHEN auth_path IN ('gcloud-adc', 'own-client')"
+            " THEN 'connected' ELSE status END WHERE brand = ?",
+            (at, brand),
+        )
+        self._conn.commit()
+
+    def upsert_gsc_query_rows(self, property_url: str, rows: list[dict[str, Any]]) -> int:
+        for r in rows:
+            self._conn.execute(
+                "INSERT INTO gsc_queries (property_url, data_date, query, page, device, country,"
+                " search_type, clicks, impressions, ctr, position, pulled_at)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                " ON CONFLICT(property_url, data_date, query, page, device, country, search_type)"
+                " DO UPDATE SET clicks = excluded.clicks, impressions = excluded.impressions,"
+                " ctr = excluded.ctr, position = excluded.position, pulled_at = excluded.pulled_at",
+                (
+                    property_url,
+                    r["data_date"],
+                    r["query"],
+                    r.get("page") or "",
+                    r.get("device") or "",
+                    r.get("country") or "",
+                    r.get("search_type", "web"),
+                    r["clicks"],
+                    r["impressions"],
+                    r["ctr"],
+                    r["position"],
+                    r["pulled_at"],
+                ),
+            )
+        self._conn.commit()
+        return len(rows)
+
+    def gsc_query_rows(self, property_url: str, start_date: str, end_date: str) -> list[dict[str, Any]]:
+        return [
+            dict(r)
+            for r in self._conn.execute(
+                "SELECT * FROM gsc_queries WHERE property_url = ? AND data_date BETWEEN ? AND ?"
+                " ORDER BY data_date, query",
+                (property_url, start_date, end_date),
+            ).fetchall()
+        ]
+
+    def mark_gsc_pull_complete(self, property_url: str, dimension: str, data_date: str) -> None:
+        self._conn.execute(
+            "INSERT INTO gsc_pull_state (property_url, dimension, data_date, completed_at)"
+            " VALUES (?, ?, ?, ?) ON CONFLICT(property_url, dimension, data_date) DO NOTHING",
+            (property_url, dimension, data_date, utcnow()),
+        )
+        self._conn.commit()
+
+    def gsc_pull_complete(self, property_url: str, dimension: str, data_date: str) -> bool:
+        row = self._conn.execute(
+            "SELECT 1 FROM gsc_pull_state WHERE property_url = ? AND dimension = ? AND data_date = ?",
+            (property_url, dimension, data_date),
+        ).fetchone()
+        return row is not None
+
+    def upsert_gsc_inspection(self, row: dict[str, Any]) -> None:
+        self._conn.execute(
+            "INSERT INTO gsc_inspections (property_url, url, inspected_at, index_status, mobile_usable,"
+            " last_crawl) VALUES (?, ?, ?, ?, ?, ?)"
+            " ON CONFLICT(property_url, url) DO UPDATE SET inspected_at = excluded.inspected_at,"
+            " index_status = excluded.index_status, mobile_usable = excluded.mobile_usable,"
+            " last_crawl = excluded.last_crawl",
+            (
+                row["property_url"],
+                row["url"],
+                row["inspected_at"],
+                row.get("index_status"),
+                row.get("mobile_usable"),
+                row.get("last_crawl"),
+            ),
+        )
+        self._conn.commit()
+
+    def gsc_sync_range(self, property_url: str) -> dict[str, Any] | None:
+        row = self._conn.execute(
+            "SELECT MIN(data_date) AS start_date, MAX(data_date) AS end_date,"
+            " COUNT(DISTINCT data_date) AS days FROM gsc_queries WHERE property_url = ?",
+            (property_url,),
+        ).fetchone()
+        if row is None or row["start_date"] is None:
+            return None
+        return {
+            "start_date": row["start_date"],
+            "end_date": row["end_date"],
+            "days": row["days"],
+        }

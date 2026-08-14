@@ -4,15 +4,34 @@ version = "0.1.0"
 description = "Local-first, research-gated, claim-safe SEO content production CLI"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = "MIT"
+authors = [{ name = "SEO Writer contributors" }]
+maintainers = [{ name = "SEO Writer maintainers" }]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Internet :: WWW/HTTP",
+]
+license-files = ["LICENSE"]
+keywords = ["seo", "content", "google-search-console", "cli"]
 dependencies = [
     "typer>=0.12",
     "pydantic>=2.7",
     "PyYAML>=6.0",
 ]
 
+[project.urls]
+Homepage = "https://github.com/xuhouchang/seo-writer"
+Repository = "https://github.com/xuhouchang/seo-writer"
+Issues = "https://github.com/xuhouchang/seo-writer/issues"
+
 [project.scripts]
-seo-writer = "seo_writer.cli:app"
+seo-writer = "seo_writer.cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,6 +45,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/seo_writer"]
+force-include = { "LICENSE" = "LICENSE", "NOTICE" = "NOTICE" }
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "LICENSE", "NOTICE", "pyproject.toml", "uv.lock"]
 
 [tool.ruff]
 line-length = 110

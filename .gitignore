@@ -12,5 +12,11 @@ data/
 workspace/
 *.sqlite
 *.sqlite3
+*.db
+*.csv
+*.tsv
+.secrets.yaml
+**/token.json
+**/client.json
 .env
 .env.*

@@ -1,6 +1,5 @@
-# Run policy: deterministic, offline-first. All five provider roles use the
-# deterministic mock profiles; no keys, no paid APIs. Real provider profiles
-# land in Phase 2 (see docs/MIGRATION.md).
+# Synthetic demo policy only. Production users must configure their own
+# credentials and import examples/brand-packs/policy-real.template.yaml.
 brand: acme
 providers:
   keyword:

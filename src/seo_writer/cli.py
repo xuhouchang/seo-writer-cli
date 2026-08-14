@@ -21,8 +21,9 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
+from typer import _click as click
 
-from . import RULES_VERSION, __version__, onboard, services
+from . import RULES_VERSION, __version__, gsc, onboard, services
 from .config import Workspace, ensure_workspace, load_yaml_model, resolve_data_dir, resolve_workspace
 from .db import Database
 from .errors import ProviderError, SeoWriterError, UsageError, ValidationFailedError
@@ -30,16 +31,21 @@ from .facts import import_facts
 from .models import FactsYaml, PolicyYaml
 from .policy import import_policy
 
-app = typer.Typer(help="Local-first, gate-governed SEO content production CLI.", no_args_is_help=True)
+app = typer.Typer(help="Local-first, gate-governed SEO content production CLI.", invoke_without_command=True)
 brand_app = typer.Typer(help="Brand management.", no_args_is_help=True)
 brand_facts_app = typer.Typer(help="Per-brand fact ledger.", no_args_is_help=True)
 brand_policy_app = typer.Typer(help="Per-brand run policy.", no_args_is_help=True)
 project_app = typer.Typer(help="Project management.", no_args_is_help=True)
 run_app = typer.Typer(help="ArticleRun lifecycle.", no_args_is_help=True)
-onboard_app = typer.Typer(help="New-brand onboarding (site memory, crawl, audit, confirmation).",
-    no_args_is_help=True,)
-providers_app = typer.Typer(help="Provider credential configuration (DataForSEO, Reddit).",
-    no_args_is_help=True,)
+onboard_app = typer.Typer(
+    help="New-brand onboarding (site memory, crawl, audit, confirmation).",
+    no_args_is_help=True,
+)
+providers_app = typer.Typer(
+    help="Provider credential configuration (DataForSEO, Reddit).",
+    no_args_is_help=True,
+)
+gsc_app = typer.Typer(help="Google Search Console closed loop (measure → iterate).", no_args_is_help=True)
 
 app.add_typer(brand_app, name="brand")
 brand_app.add_typer(brand_facts_app, name="facts")
@@ -48,6 +54,7 @@ app.add_typer(project_app, name="project")
 app.add_typer(run_app, name="run")
 app.add_typer(onboard_app, name="onboard")
 app.add_typer(providers_app, name="providers")
+app.add_typer(gsc_app, name="gsc")
 
 
 class Ctx:
@@ -61,6 +68,7 @@ state = Ctx()
 
 @app.callback()
 def _main(
+    ctx: typer.Context,
     data_dir: Annotated[str | None, typer.Option(help="Data directory (default ~/.seo-writer)")] = None,
     workspace: Annotated[str | None, typer.Option("--workspace", "-w", help="Workspace slug")] = None,
     json_out: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON")] = False,
@@ -72,6 +80,8 @@ def _main(
     state.data_dir = resolve_data_dir(data_dir)
     state.workspace = resolve_workspace(workspace)
     state.json = json_out
+    if ctx.invoked_subcommand is None and not version:
+        typer.echo(ctx.get_help())
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +105,8 @@ def _guard(fn: Callable[[], Any]) -> Any:
                 payload.update({"step": exc.step, "reasons": exc.reasons})
             if isinstance(exc, ProviderError):
                 payload.update({"provider": exc.provider, "retryable": exc.retryable})
+            if isinstance(exc, gsc.GscError):
+                payload.update({"retryable": exc.retryable})
             print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         else:
             print(f"error: {exc}", file=sys.stderr)
@@ -140,6 +152,20 @@ def _require_both(brand: str | None, project: str | None) -> None:
         raise UsageError("--brand and --project must be given together")
 
 
+def main() -> int:
+    """Run Typer while preserving JSON output for command-line usage errors."""
+    try:
+        result = app(standalone_mode=False)
+    except click.ClickException as exc:
+        if "--json" in sys.argv[1:]:
+            payload = {"error": "UsageError", "message": exc.format_message()}
+            print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
+        else:
+            exc.show()
+        return int(exc.exit_code)
+    return result if isinstance(result, int) else 0
+
+
 # ---------------------------------------------------------------------------
 # init
 # ---------------------------------------------------------------------------
@@ -148,13 +174,17 @@ def _require_both(brand: str | None, project: str | None) -> None:
 @app.command()
 def init() -> None:
     """Create the workspace (database + objects directory) if missing."""
-    return _guard(
-        lambda: {
+
+    def run() -> dict[str, str]:
+        ws, db = _open()
+        db.close()
+        return {
             "workspace": str(state.data_dir / state.workspace),
             "rules_version": RULES_VERSION,
             "cli_version": __version__,
         }
-    )
+
+    return _guard(run)
 
 
 # ---------------------------------------------------------------------------
@@ -233,14 +263,44 @@ def onboard_status(
 @onboard_app.command("confirm")
 def onboard_confirm(
     slug: Annotated[str, typer.Argument(help="Brand slug")],
-    approver: Annotated[str | None, typer.Option(help="Who confirms the feature summary")] = None,
+    approver: Annotated[str | None, typer.Option(help="Who confirms the product evidence brief")] = None,
 ) -> None:
-    """Step 3 — confirm the agent-authored feature summary after customer review."""
+    """Step 3 — confirm the agent-authored product evidence brief after customer review."""
 
     def run() -> dict:
         ws, db = _open()
         services.resolve_brand(db, slug)
         return onboard.confirm_features(ws, slug, approver or os.environ.get("USER", "cli"))
+
+    return _guard(run)
+
+
+@onboard_app.command("brand-profile")
+def onboard_brand_profile(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    out_dir: Annotated[str | None, typer.Option(help="Also copy review artifacts here")] = None,
+) -> None:
+    """Generate an English-only factual brand profile review HTML and JSON source."""
+
+    def run() -> dict:
+        ws, db = _open()
+        brand = services.resolve_brand(db, slug)
+        return services.generate_brand_profile_review(ws, db, brand, out_dir=out_dir)
+
+    return _guard(run)
+
+
+@onboard_app.command("import-brand-profile")
+def onboard_import_brand_profile(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    review_json: Annotated[str, typer.Argument(help="Downloaded brand-profile review JSON")],
+) -> None:
+    """Import a current factual review; stale revision or input hashes are rejected."""
+
+    def run() -> dict:
+        ws, db = _open()
+        brand = services.resolve_brand(db, slug)
+        return services.import_brand_profile_review(ws, db, brand, review_json)
 
     return _guard(run)
 
@@ -496,7 +556,13 @@ def run_research(
     def run() -> dict:
         _, db = _open()
         run, _brand, policy = _run_context(db, run_id)
-        return services.run_research(db, run, policy, key=idempotency_key)
+        return services.run_research(
+            db,
+            run,
+            policy,
+            key=idempotency_key,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -534,7 +600,60 @@ def run_outline(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_outline(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_outline(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
+
+    return _guard(run)
+
+
+@run_app.command("gap-map")
+def run_gap_map(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    from_file: Annotated[str, typer.Option("--from-file", help="content-map.json path")],
+) -> None:
+    """Import and validate a current-run evidence-backed content map."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, _brand, _policy = _run_context(db, run_id)
+        return services.import_gap_map(ws, db, article_run, from_file)
+
+    return _guard(run)
+
+
+@run_app.command("render")
+def run_render(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    view: Annotated[str, typer.Option("--view", help="content-map | opportunities | outline")],
+) -> None:
+    """Deterministically render a read-only self-contained HTML review."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, brand, _policy = _run_context(db, run_id)
+        return services.render_run_view(ws, db, article_run, brand, view)
+
+    return _guard(run)
+
+
+@run_app.command("import-review")
+def run_import_review(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    review_json: Annotated[str, typer.Argument(help="Downloaded outline-review.json path")],
+) -> None:
+    """Import outline feedback and create a new, unapproved outline revision."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, brand, _policy = _run_context(db, run_id)
+        return services.import_outline_review(ws, db, article_run, brand, review_json)
 
     return _guard(run)
 
@@ -576,7 +695,15 @@ def run_draft(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_draft(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_draft(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -601,7 +728,15 @@ def run_metadata(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_metadata(db, run, brand, policy, key=idempotency_key, from_file=from_file)
+        return services.run_metadata(
+            db,
+            run,
+            brand,
+            policy,
+            key=idempotency_key,
+            from_file=from_file,
+            provider_data_dir=state.data_dir,
+        )
 
     return _guard(run)
 
@@ -623,13 +758,13 @@ def run_validate(
 @run_app.command("export")
 def run_export(
     run_id: Annotated[str, typer.Argument(help="Run id")],
-    format: Annotated[str, typer.Option("--format", help="Export format (Phase 1: markdown)")] = "markdown",
-    out_dir: Annotated[str | None, typer.Option(help="Copy article.md + manifest.json here")] = None,
+    format: Annotated[str, typer.Option("--format", help="Export format: markdown | html")] = "markdown",
+    out_dir: Annotated[str | None, typer.Option(help="Copy article + manifest.json here")] = None,
     idempotency_key: Annotated[
         str | None, typer.Option(help="Deterministic key (defaults to run:{id}:export)")
     ] = None,
 ) -> None:
-    """Export a completed run: article.md + traceable manifest.json."""
+    """Export a completed run as article.md or article.html plus a traceable manifest."""
 
     def run() -> dict:
         ws, db = _open()
@@ -688,6 +823,168 @@ def run_retry(
     def run() -> dict:
         _, db = _open()
         run, brand, policy = _run_context(db, run_id)
-        return services.run_retry(db, run, brand, step, policy)
+        return services.run_retry(db, run, brand, step, policy, provider_data_dir=state.data_dir)
+
+    return _guard(run)
+
+
+# ---------------------------------------------------------------------------
+# gsc (Google Search Console closed loop)
+# ---------------------------------------------------------------------------
+
+
+def _gsc_prompt(message: str) -> str:
+    """Interactive prompt; refused under --json (the CLI stays scriptable)."""
+    if state.json:
+        raise UsageError("interactive setup needs a terminal; drop --json or pass the required options")
+    return typer.prompt(message)
+
+
+@gsc_app.command("setup")
+def gsc_setup(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    client_json: Annotated[
+        str | None, typer.Option(help="Path to a Desktop-app client json (path B)")
+    ] = None,
+) -> None:
+    """Detect the auth path and guide setup: gcloud ADC (path A) or own client (path B)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.setup_guide(
+            db, ws, brand, client_json=client_json, interactive=not state.json, prompt=_gsc_prompt
+        )
+
+    return _guard(run)
+
+
+@gsc_app.command("auth")
+def gsc_auth(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    no_launch_browser: Annotated[bool, typer.Option(help="Print the URL and paste the code back")] = False,
+) -> None:
+    """One-time browser authorization (path A: gcloud login; path B: PKCE desktop flow)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.run_auth(
+            db, ws, brand, no_launch_browser=no_launch_browser, prompt=_gsc_prompt if not state.json else None
+        )
+
+    return _guard(run)
+
+
+@gsc_app.command("sites")
+def gsc_sites(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+) -> None:
+    """List the GSC properties the authorized account can see."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        creds, _ = gsc.load_credentials(db, ws, brand)
+        return gsc.list_sites(creds)
+
+    return _guard(run)
+
+
+@gsc_app.command("connect")
+def gsc_connect(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    property: Annotated[
+        str, typer.Option(help="Property URL, e.g. https://www.example.com/ or sc-domain:example.com")
+    ],
+) -> None:
+    """Bind a GSC property to the brand (verified against the account's sites)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.connect_property(db, ws, brand, property)
+
+    return _guard(run)
+
+
+@gsc_app.command("pull")
+def gsc_pull(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    start_date: Annotated[str | None, typer.Option(help="YYYY-MM-DD (default: 30 days back)")] = None,
+    end_date: Annotated[
+        str | None, typer.Option(help="YYYY-MM-DD (default: today minus 3d freshness)")
+    ] = None,
+    force: Annotated[bool, typer.Option(help="Re-pull dates already synced")] = False,
+) -> None:
+    """Pull (date,query) + (date,page) rows per day; idempotent, paginated, backoff-protected."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.pull_search_analytics(db, ws, brand, start_date=start_date, end_date=end_date, force=force)
+
+    return _guard(run)
+
+
+@gsc_app.command("inspect")
+def gsc_inspect(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    url: Annotated[str, typer.Option(help="URL to inspect")],
+) -> None:
+    """Check one URL's index coverage via URL Inspection."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.inspect_url(db, ws, brand, url)
+
+    return _guard(run)
+
+
+@gsc_app.command("import")
+def gsc_import(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    csv_file: Annotated[str, typer.Argument(help="GSC UI export CSV (Query/Page + metrics)")],
+    property: Annotated[
+        str | None, typer.Option(help="Property URL when the brand has no connected property")
+    ] = None,
+) -> None:
+    """Import a dated GSC UI export CSV (fallback path C, no credentials needed)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.import_gsc_csv(db, ws, brand, csv_file, property_url=property)
+
+    return _guard(run)
+
+
+@gsc_app.command("insights")
+def gsc_insights(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+    window: Annotated[int, typer.Option(help="Look-back days (default 28)")] = 28,
+    url: Annotated[str | None, typer.Option(help="URL performance vs audit baseline")] = None,
+) -> None:
+    """Closed-loop reports: high impressions/low CTR, rising queries, URL performance."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.insights(db, ws, brand, window=window, url=url)
+
+    return _guard(run)
+
+
+@gsc_app.command("status")
+def gsc_status(
+    brand: Annotated[str, typer.Option(help="Brand slug")],
+) -> None:
+    """Show brand ↔ property binding, sync range and credential path state (no secrets)."""
+
+    def run() -> dict:
+        ws, db = _open()
+        services.resolve_brand(db, brand)
+        return gsc.gsc_status(db, ws, brand)
 
     return _guard(run)

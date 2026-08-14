@@ -7,9 +7,9 @@ in these files; only profile references (keys come from env/secret store).
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 SAFETY_LEVELS = {"safe", "qualified", "topic_specific", "blocked"}
 FETCH_METHODS = {
@@ -108,6 +108,10 @@ class ProviderPolicy(BaseModel):
     name: str = "mock"
     profile: str = "mock-default"
     fixture_dir: str | None = None
+    base_url: str | None = None
+    location_code: int = 2840
+    language_code: str = "en"
+    device: str = "desktop"
     retryable: bool = True
     budget_cap: float | None = None
 
@@ -146,3 +150,224 @@ class TopicYaml(BaseModel):
     audience: str = ""
     existing_blog_urls: list[str] = Field(default_factory=list)
     notes: str = ""
+    primary_job_to_be_done: str = ""
+    buyer_questions: list[str] = Field(default_factory=list)
+    candidate_competitors: list[str] = Field(default_factory=list)
+    desired_formats: list[str] = Field(default_factory=list)
+    gap_hypothesis: str = ""
+
+
+class BrandProfileReview(BaseModel):
+    """English-first factual onboarding payload. No behavioural fields live here."""
+
+    schema_version: int = 1
+    company_name: str
+    website: str
+    target_audience: str = "Not stated"
+    primary_use_case: str = "Not stated"
+    features: list[str] = Field(default_factory=list)
+    advantages: list[str] = Field(default_factory=list)
+    benefits: list[str] = Field(default_factory=list)
+    limitations_and_non_capabilities: list[str] = Field(default_factory=list)
+    competitor_candidates_and_alternatives: list[str] = Field(default_factory=list)
+    primary_market: str = "US"
+    content_language: Literal["en"] = "en"
+    factual_followups: list[str] = Field(default_factory=list)
+
+
+class CompetitorCandidate(BaseModel):
+    name: str
+    url: str = ""
+    competitor_types: list[
+        Literal[
+            "business_competitor",
+            "search_competitor",
+            "ai_cited_competitor",
+            "substitute",
+            "publisher",
+        ]
+    ] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class CoverageScore(BaseModel):
+    concept_explanation: int = Field(default=0, ge=0, le=3)
+    decision_criteria: int = Field(default=0, ge=0, le=3)
+    implementation_detail: int = Field(default=0, ge=0, le=3)
+    limitations_tradeoffs: int = Field(default=0, ge=0, le=3)
+    first_party_evidence: int = Field(default=0, ge=0, le=3)
+    evidence_refs: list[str] = Field(default_factory=list)
+    summary: str = ""
+
+    @model_validator(mode="after")
+    def evidence_for_observed_coverage(self) -> CoverageScore:
+        scores = (
+            self.concept_explanation,
+            self.decision_criteria,
+            self.implementation_detail,
+            self.limitations_tradeoffs,
+            self.first_party_evidence,
+        )
+        if any(score > 0 for score in scores) and (not self.evidence_refs or not self.summary.strip()):
+            raise ValueError("nonzero coverage requires evidence_refs and a summary")
+        return self
+
+
+class ContentMapTopic(BaseModel):
+    topic_id: str = Field(pattern=r"^TOPIC-[A-Z0-9-]+$")
+    label: str
+
+
+class ContentMapPage(BaseModel):
+    evidence_id: str
+    url: str
+    domain: str
+    competitor_types: list[str] = Field(default_factory=list)
+    topic_ids: list[str] = Field(default_factory=list)
+    intent_stage: str = "unknown"
+    content_format: str = "unknown"
+    coverage: CoverageScore = Field(default_factory=CoverageScore)
+    observed_claims: list[str] = Field(default_factory=list)
+    observed_limitations: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class SampleScope(BaseModel):
+    query_count: int = Field(ge=0)
+    domain_count: int = Field(ge=0)
+    opened_page_count: int = Field(ge=0)
+
+
+class GapHypothesis(BaseModel):
+    gap_id: str
+    gap_type: Literal["topic", "intent", "format", "depth"]
+    statement: str
+    buyer_evidence_refs: list[str] = Field(min_length=1)
+    competitor_evidence_refs: list[str] = Field(min_length=1)
+    reason_codes: list[str] = Field(default_factory=list)
+
+
+class EvidenceStatus(BaseModel):
+    status: Literal["confirmed", "customer_input_needed", "editorial_hypothesis", "unknown"]
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class MarketGap(BaseModel):
+    confidence: Literal["weak", "moderate", "strong", "unknown"] = "unknown"
+    reason_codes: list[str] = Field(default_factory=list)
+    evidence_refs: list[str] = Field(default_factory=list)
+
+
+class BrandFit(BaseModel):
+    level: Literal["weak", "moderate", "strong", "unknown"] = "unknown"
+    fab_refs: list[str] = Field(default_factory=list)
+
+
+class DifferentiationReadiness(BaseModel):
+    status: Literal["confirmed", "customer_input_needed", "editorial_hypothesis", "unknown"] = "unknown"
+    available_case_refs: list[str] = Field(default_factory=list)
+    followup_questions: list[str] = Field(default_factory=list)
+
+
+class OpportunityCard(BaseModel):
+    opportunity_id: str
+    title: str
+    gap_types: list[Literal["topic", "intent", "format", "depth"]] = Field(min_length=1)
+    buyer_need: EvidenceStatus
+    market_gap: MarketGap
+    brand_fit: BrandFit
+    differentiation_readiness: DifferentiationReadiness
+    recommended_format: str = ""
+    risks: list[str] = Field(default_factory=list)
+    decision: Literal["candidate", "prioritize", "validate", "reframe", "defer", "excluded"] = "candidate"
+
+
+class ContentMap(BaseModel):
+    schema_version: int = 1
+    run_id: str
+    sample_scope: SampleScope
+    topics: list[ContentMapTopic] = Field(default_factory=list)
+    pages: list[ContentMapPage] = Field(default_factory=list)
+    gaps: list[GapHypothesis] = Field(default_factory=list)
+    opportunities: list[OpportunityCard] = Field(default_factory=list)
+
+
+class ContextualPrompt(BaseModel):
+    prompt_id: str
+    section_id: str | None = None
+    viewpoint_id: str | None = None
+    prompt: str
+    response_type: Literal["case", "experience", "decision_rule", "not_a_fit", "proof_request"]
+
+    @model_validator(mode="after")
+    def bound_to_outline(self) -> ContextualPrompt:
+        if not self.section_id and not self.viewpoint_id:
+            raise ValueError("contextual prompt requires section_id or viewpoint_id")
+        return self
+
+
+class CaseLead(BaseModel):
+    section_id: str
+    viewpoint_id: str
+    summary: str
+    publishability: Literal["unknown", "public", "confidential"] = "unknown"
+
+
+class ExperienceLead(BaseModel):
+    section_id: str
+    viewpoint_id: str
+    summary: str
+    publishability: Literal["unknown", "public", "confidential"] = "unknown"
+
+
+class ViewpointCard(BaseModel):
+    viewpoint_id: str
+    section_id: str
+    statement: str
+    viewpoint_type: Literal[
+        "consensus", "contrarian_hypothesis", "decision_rule", "not_a_fit", "case_prompt", "proof_request"
+    ] = "consensus"
+    status: Literal[
+        "confirmed", "customer_input_needed", "editorial_hypothesis", "rejected", "confidential", "unknown"
+    ] = "editorial_hypothesis"
+    blocking: bool = False
+    basis: dict[str, list[str]] = Field(default_factory=dict)
+    contextual_prompts: list[ContextualPrompt] = Field(default_factory=list)
+
+    @field_validator("contextual_prompts")
+    @classmethod
+    def cap_prompts(cls, prompts: list[ContextualPrompt]) -> list[ContextualPrompt]:
+        if len(prompts) > 2:
+            raise ValueError("a Viewpoint Card may contain at most 2 contextual prompts")
+        return prompts
+
+
+class VisualizationSpec(BaseModel):
+    visualization_id: str
+    kind: Literal[
+        "coverage_heatmap",
+        "opportunity_quadrant",
+        "buyer_journey",
+        "format_distribution",
+        "article_architecture",
+        "evidence_provenance",
+        "table_only",
+    ]
+    title: str
+    reason: str
+    input_fields: list[str] = Field(default_factory=list)
+    fallback: str
+    render: bool = True
+
+
+class ReviewEnvelope(BaseModel):
+    schema_version: int = 1
+    review_type: Literal["brand_profile", "opportunity", "outline"]
+    workspace: str
+    brand: str
+    run_id: str | None = None
+    revision: int = Field(ge=1)
+    input_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    reviewer: str = ""
+    reviewed_at: str = ""
+    decisions: list[dict[str, Any]] = Field(default_factory=list)

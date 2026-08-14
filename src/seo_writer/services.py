@@ -41,9 +41,31 @@ from .validators.claim_safety import (
     validate_run_corpus,
 )
 from .validators.research_gate import evaluate as evaluate_gate
+from .workflow import (
+    generate_brand_profile_review,  # noqa: F401 - public service facade
+    import_brand_profile_review,  # noqa: F401 - public service facade
+    import_gap_map,  # noqa: F401 - public service facade
+    import_outline_review,  # noqa: F401 - public service facade
+    render_article_html,
+    render_run_view,  # noqa: F401 - public service facade
+)
 
 # Conservative per-call cost estimate used for the run budget pre-check.
 MAX_CALL_COST = {"keyword": 0.001, "serp": 0.002, "webfetch": 0.002, "community": 0.003, "llm": 0.03}
+
+
+def _approval_artifact_hashes(db: Database, run_id: str, revision: int) -> dict[str, str]:
+    root = db.path.parent / "objects" / run_id
+    candidates = {
+        "gap_map_hash": root / "gap" / "content-map.json",
+        "outline_sidecar_hash": root / "outlines" / f"rev-{revision}.json",
+        "review_hash": root / "reviews" / f"outline-rev-{revision - 1}.review.json",
+    }
+    return {
+        name: f"sha256:{sha256_text(path.read_text(encoding='utf-8'))}"
+        for name, path in candidates.items()
+        if path.is_file()
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -212,7 +234,12 @@ def _evidence_row(**kw: Any) -> dict[str, Any]:
 
 
 def run_research(
-    db: Database, run: dict, policy: PolicyYaml, providers: dict | None = None, key: str | None = None
+    db: Database,
+    run: dict,
+    policy: PolicyYaml,
+    providers: dict | None = None,
+    key: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     _resume_allowed(run, "research")
     run_id = run["id"]
@@ -220,7 +247,7 @@ def run_research(
     prior = db.get_command_result(run_id, "research", key)
     if prior is not None:
         return prior
-    providers = providers or build_providers(policy)
+    providers = providers or build_providers(policy, data_dir=provider_data_dir)
     brief = json.loads(run["brief_snapshot"])
     kw = providers["keyword"]
     serp = providers["serp"]
@@ -260,7 +287,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"KW-{i + 1:02d}",
                     source_type="keyword",
-                    fetch_method="mock_api",
+                    fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     title=k,
@@ -271,7 +298,7 @@ def run_research(
             _evidence_row(
                 evidence_id="KW-REL-01",
                 source_type="keyword",
-                fetch_method="mock_api",
+                fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                 opened_current_run=False,
                 evidence_origin="structured_discovery",
                 title="related keywords",
@@ -282,7 +309,7 @@ def run_research(
             _evidence_row(
                 evidence_id="KW-PAA-01",
                 source_type="keyword",
-                fetch_method="mock_api",
+                fetch_method=f"{kw.name}_api" if kw.name != "mock" else "mock_api",
                 opened_current_run=False,
                 evidence_origin="structured_discovery",
                 title="PAA candidates",
@@ -315,17 +342,17 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"Q-{i + 1:02d}",
                     source_type="search_query",
-                    fetch_method="mock_api",
+                    fetch_method=q.data.get("query_method", "mock_api"),
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     title=q.data["query"],
                     grade=label,
                     details={
                         "query": q.data["query"],
-                        "query_method": "mock_api",
+                        "query_method": q.data.get("query_method", "mock_api"),
                         "timestamp": q.timestamp,
                         "location_language_device": "US / en / desktop",
-                        "observation_method": "mock_api",
+                        "observation_method": q.data.get("query_method", "mock_api"),
                         "aio_visible": q.data.get("aio_visible"),
                         "aio_conclusion": q.data.get("aio_conclusion"),
                         "paa": q.data.get("paa"),
@@ -358,7 +385,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"SERP-{opened + 1:02d}",
                     source_type="serp_page",
-                    fetch_method="mock_webfetch",
+                    fetch_method=data.get("fetch_method", "mock_webfetch"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform="Google SERP",
@@ -388,7 +415,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-CAND-{i + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_api",
+                    fetch_method=f"{community.name}_api" if community.name != "mock" else "mock_api",
                     opened_current_run=False,
                     evidence_origin="structured_discovery",
                     platform=c["platform"],
@@ -419,7 +446,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-{n + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_reddit",
+                    fetch_method=data.get("fetch_method", "mock_reddit"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform=data["platform"],
@@ -450,7 +477,7 @@ def run_research(
                 _evidence_row(
                     evidence_id=f"THREAD-SP-{j + 1:02d}",
                     source_type="community_thread",
-                    fetch_method="mock_reddit",
+                    fetch_method=data.get("fetch_method", "mock_reddit"),
                     opened_current_run=True,
                     evidence_origin="current_run",
                     platform=data["platform"],
@@ -526,6 +553,7 @@ def run_outline(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) an outline revision.
 
@@ -559,7 +587,7 @@ def run_outline(
         prior = db.get_command_result(run_id, "outline", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         brief = json.loads(run["brief_snapshot"])
         facts = load_facts(db, brand["id"])
@@ -637,7 +665,12 @@ def approve_outline(db: Database, run: dict, brand: dict, outline_revision: int,
     db.add_audit(
         run_id,
         "outline.approved",
-        {"outline_revision": outline_revision, "approver": approver, "facts_hash": facts_hash},
+        {
+            "outline_revision": outline_revision,
+            "approver": approver,
+            "facts_hash": facts_hash,
+            **_approval_artifact_hashes(db, run_id, outline_revision),
+        },
     )
     return {
         "run_id": run_id,
@@ -662,6 +695,24 @@ def current_approval(db: Database, run: dict, brand: dict) -> dict:
         )
     if approval["facts_hash"] != current["snapshot_hash"]:
         raise ApprovalInvalidatedError("facts changed since approval; re-approve the outline")
+    approved_events = [
+        {**event, "payload": json.loads(event["payload"])}
+        for event in db.list_audit(run["id"])
+        if event["event_type"] == "outline.approved"
+        and json.loads(event["payload"]).get("outline_revision") == run["approved_revision"]
+    ]
+    if approved_events:
+        bound = approved_events[-1]["payload"]
+        current_hashes = _approval_artifact_hashes(db, run["id"], run["approved_revision"])
+        changed = [
+            name
+            for name in ("gap_map_hash", "outline_sidecar_hash", "review_hash")
+            if name in bound and current_hashes.get(name) != bound[name]
+        ]
+        if changed:
+            raise ApprovalInvalidatedError(
+                f"review artifacts changed since approval: {', '.join(changed)}; re-approve the outline"
+            )
     return approval
 
 
@@ -678,6 +729,7 @@ def run_draft(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) the article draft.
 
@@ -702,7 +754,7 @@ def run_draft(
         prior = db.get_command_result(run_id, "draft", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         outline = db.get_outline(run_id, run["approved_revision"])
         facts = load_facts(db, brand["id"])
@@ -749,6 +801,7 @@ def run_metadata(
     providers: dict | None = None,
     key: str | None = None,
     from_file: str | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Generate (or import) SEO metadata.
 
@@ -774,7 +827,7 @@ def run_metadata(
         prior = db.get_command_result(run_id, "metadata", key)
         if prior is not None:
             return prior
-        providers = providers or build_providers(policy)
+        providers = providers or build_providers(policy, data_dir=provider_data_dir)
         llm = llm_provider(providers)
         outline = db.get_outline(run_id, run["approved_revision"])
         paa_pool: list[str] = []
@@ -862,8 +915,8 @@ def run_export(
     key: str | None = None,
     out_dir: str | None = None,
 ) -> dict:
-    if fmt != "markdown":
-        raise UsageError(f"unsupported export format '{fmt}' (Phase 1 supports 'markdown')")
+    if fmt not in {"markdown", "html"}:
+        raise UsageError(f"unsupported export format '{fmt}' (supported: html, markdown)")
     if run["status"] not in {sm.COMPLETED, sm.EXPORTED}:
         raise SeoWriterError(
             f"export requires status completed (current: {run['status']});"
@@ -951,8 +1004,41 @@ def run_export(
     }
     base = ws.run_dir(run_id) / "export" / fmt
     base.mkdir(parents=True, exist_ok=True)
-    article_path = base / "article.md"
-    article_path.write_text(article, encoding="utf-8")
+    if fmt == "html":
+        article_path = base / "article.html"
+        article_output = render_article_html(
+            article,
+            {
+                "title": meta.get("meta_title") or json.loads(run["brief_snapshot"])["title"],
+                "brand": brand["slug"],
+                "workspace": ws.slug,
+                "run_id": run_id,
+                "revision": run["outline_revision"],
+                "input_hash": f"sha256:{sha256_text(article)}",
+                "status": "Approved article review",
+                "rules_version": RULES_VERSION,
+            },
+        )
+    else:
+        article_path = base / "article.md"
+        article_output = article
+    article_path.write_text(article_output, encoding="utf-8")
+    artifact_files = {
+        "content_map": ws.run_dir(run_id) / "gap" / "content-map.json",
+        "outline_sidecar": ws.run_dir(run_id) / "outlines" / f"rev-{run['outline_revision']}.json",
+        "outline_review": ws.run_dir(run_id)
+        / "reviews"
+        / f"outline-rev-{run['outline_revision'] - 1}.review.json",
+    }
+    manifest["artifacts"] = {
+        key_name: {"path": str(path), "sha256": f"sha256:{sha256_text(path.read_text(encoding='utf-8'))}"}
+        for key_name, path in artifact_files.items()
+        if path.is_file()
+    }
+    manifest["artifacts"]["article_html" if fmt == "html" else "article_markdown"] = {
+        "path": str(article_path),
+        "sha256": f"sha256:{sha256_text(article_output)}",
+    }
     manifest_path = base / "manifest.json"
     manifest_path.write_text(
         json.dumps(manifest, ensure_ascii=False, indent=2, default=str), encoding="utf-8"
@@ -999,12 +1085,19 @@ def _copy_export_to(article_path: str, manifest_path: str, out_dir: str) -> None
     """Copy an export's article + manifest to a caller-specified directory."""
     target = Path(out_dir).expanduser()
     target.mkdir(parents=True, exist_ok=True)
-    (target / "article.md").write_text(Path(article_path).read_text(encoding="utf-8"), encoding="utf-8")
+    source = Path(article_path)
+    (target / source.name).write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     (target / "manifest.json").write_text(Path(manifest_path).read_text(encoding="utf-8"), encoding="utf-8")
 
 
 def run_retry(
-    db: Database, run: dict, brand: dict, step: str, policy: PolicyYaml, providers: dict | None = None
+    db: Database,
+    run: dict,
+    brand: dict,
+    step: str,
+    policy: PolicyYaml,
+    providers: dict | None = None,
+    provider_data_dir: Path | None = None,
 ) -> dict:
     """Explicit, non-silent re-execution of a step (fresh idempotency key)."""
     resume = sm.RETRY_RESUME.get(step)
@@ -1016,17 +1109,40 @@ def run_retry(
         db.set_status(run["id"], sm.RESEARCHING, step="research", failure_reason=None)
         db.add_audit(run["id"], "retry.research", {"from": run["status"]})
         run["status"] = sm.RESEARCHING
-        return run_research(db, run, policy, providers=providers, key=f"run:{run['id']}:research:retry")
+        return run_research(
+            db,
+            run,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:research:retry",
+            provider_data_dir=provider_data_dir,
+        )
     if step == "outline":
         db.set_status(run["id"], sm.OUTLINE_PENDING, step="outline", failure_reason=None)
         db.add_audit(run["id"], "retry.outline", {"from": run["status"]})
         run["status"] = sm.OUTLINE_PENDING
-        return run_outline(db, run, brand, policy, providers=providers, key=f"run:{run['id']}:outline:retry")
+        return run_outline(
+            db,
+            run,
+            brand,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:outline:retry",
+            provider_data_dir=provider_data_dir,
+        )
     if step == "draft":
         db.set_status(run["id"], sm.DRAFTING, step="draft", failure_reason=None)
         db.add_audit(run["id"], "retry.draft", {"from": run["status"]})
         run["status"] = sm.DRAFTING
-        return run_draft(db, run, brand, policy, providers=providers, key=f"run:{run['id']}:draft:retry")
+        return run_draft(
+            db,
+            run,
+            brand,
+            policy,
+            providers=providers,
+            key=f"run:{run['id']}:draft:retry",
+            provider_data_dir=provider_data_dir,
+        )
     raise UsageError(f"step '{step}' has no retry handler")
 
 
