@@ -181,9 +181,12 @@ New-brand setup is a four-step journey; a ready-made agent wrapper lives in
    `ok(-0)/info(-2)/warning(-10)/error(-30)` and
    `score = max(0, 100 − errors×30 − warnings×10 − infos×2)`. Every
    `seo-audit.yaml` carries a `rubric` field naming the upstream source.
-3. **`onboard confirm <brand>`** — an agent (or you) writes the product's
-   feature summary to `brands/<slug>/site.md` from the crawled text; the
-   customer reviews and edits it; `confirm` stamps who approved and when.
+3. **`onboard confirm <brand>`** — an agent (or you) writes an evidence-backed
+   product brief to `brands/<slug>/site.md` from the crawled text. It must
+   cover target audience; FAB (Feature, Advantage, Benefit); limitations and
+   non-capabilities; competitor context; unsupported claims; and open
+   questions. The customer reviews and edits it; `confirm` rejects missing or
+   empty sections, then stamps who approved and when.
 4. **`providers configure`** — interactive DataForSEO (login/password) and
    Reddit (client_id/client_secret) setup. Secrets go to a chmod-600
    `.secrets.yaml` in the data dir — never in git, never echoed — and every
@@ -192,9 +195,27 @@ New-brand setup is a four-step journey; a ready-made agent wrapper lives in
    CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`. Production research
    refuses to silently fall back to mock data when these providers are absent.
 
-The confirmed feature summary seeds `facts.yaml` for the production pipeline.
+The confirmed product evidence brief seeds `facts.yaml` for the production pipeline.
 The real search/community providers are selected by `policy.yaml`; configure
 and verify them before `run research`.
+
+### Content gap and local HTML review
+
+After the research gate passes, import a current-run evidence-backed content
+map and render the local review reports:
+
+```bash
+seo-writer --data-dir <dir> --workspace <workspace> --json run gap-map <run-id> --from-file content-map.json
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view content-map
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view opportunities
+seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view outline
+seo-writer --data-dir <dir> --workspace <workspace> --json run import-review <run-id> outline-review.json
+seo-writer --data-dir <dir> --workspace <workspace> --json run export <run-id> --format html
+```
+
+HTML is a self-contained customer review surface. JSON, Markdown, and YAML
+remain canonical. Coverage and opportunity graphics render only when enough
+deterministic data exists; every graphic has a table or text fallback.
 
 ## Agent workflow — no LLM API needed
 

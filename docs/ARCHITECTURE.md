@@ -14,6 +14,7 @@ guarantees; `docs/MIGRATION.md` covers provider configuration.
 ├─────────────────────────────────────────────────────────────┤
 │ services.py  pipeline steps + approval + idempotency        │
 │ state_machine.py  transition table + step authorization     │
+│ workflow.py  canonical review artifacts + deterministic HTML│
 ├───────────────┬──────────────┬──────────────────────────────┤
 │ db.py         │ facts/policy │ validators/                  │
 │ SQLite        │ import +     │ research_gate (pure)         │
@@ -67,6 +68,9 @@ Notable authorizations (these carry product meaning):
 | `research` | created, researching, gate_passed, outline_pending, blocked | re-research demotes/removes stale evidence |
 | `validate_research` | researching, gate_passed, blocked | gate can be re-evaluated after remediation |
 | `outline` | gate_passed, outline_pending, approved, drafting, completed, blocked | re-generating an outline is allowed but **invalidates approval** (AC6) |
+| `gap_map` | researching, gate_passed, outline_pending, approved | validates current-run evidence and invalidates an existing approval |
+| `render` | every state except created | read-only deterministic HTML rendering |
+| `import_review` | outline_pending, approved | stale-safe import creates a new outline revision |
 | `approve` | outline_pending, approved | re-approval binds the *latest* facts snapshot |
 | `draft` | outline_pending, approved, drafting, completed, blocked | refusal on unapproved outline raises `ApprovalRequiredError` before any LLM call (AC4) |
 | `metadata` | outline_pending, drafting, completed, blocked | same approval guard as draft |
@@ -171,6 +175,11 @@ This is the traceability contract: any exported article can be walked back
 to the facts, outline revision, approval, evidence and cost total that
 produced it (AC10).
 
+The additive HTML format writes `article.html` under `export/html/`. The
+manifest records hashes for the article, content map, outline sidecar, and
+outline review when those artifacts exist. Customer-facing HTML never renders
+confidential review content.
+
 ## 8. Directory layout
 
 ```
@@ -183,6 +192,12 @@ produced it (AC10).
             ├── outlines/rev-N.md
             ├── draft.md
             ├── metadata.json
+            ├── gap/content-map.json
+            ├── gap/content-map.html
+            ├── gap/opportunity-map.html
+            ├── outlines/rev-N.json
+            ├── outlines/rev-N.html
+            ├── reviews/outline-rev-N.review.json
             └── export/markdown/
                 ├── article.md
                 └── manifest.json

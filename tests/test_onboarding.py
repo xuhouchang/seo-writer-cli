@@ -1,5 +1,5 @@
 """Onboarding: site memory, web crawl + SEO audit (seo-audit-skill subset),
-feature confirmation, and provider credential configuration with live
+product evidence confirmation, and provider credential configuration with live
 verification."""
 
 from __future__ import annotations
@@ -98,7 +98,37 @@ GOOD_SITEMAP = (
     "<url><loc>https://acme.example/</loc></url></urlset>"
 )
 
-GOOD_SITE_MD = """## Acme Editing Suite — feature summary (draft)
+GOOD_SITE_MD = """## Acme Editing Suite — product evidence brief (draft)
+
+### What the product does
+- Automates repetitive editing tasks for video teams.
+
+### Target audience
+- Video teams managing repeatable editing workflows.
+
+### Feature
+- Batch processing, timeline cleanup, and review workflows.
+
+### Advantage
+- Combines those three workflow steps in one stated product flow.
+
+### Benefit
+- Helps the target team spend less effort on repetitive editing work.
+
+### Limitations and non-capabilities
+- The source does not state that the product creates original footage.
+
+### Competitor context
+- Customer confirmation is required before naming or comparing competitors.
+
+### Claims to avoid
+- Do not claim guaranteed time savings without supporting evidence.
+
+### Open questions for the customer
+- Which competitor products should be used for factual comparisons?
+"""
+
+LEGACY_FEATURE_ONLY_SITE_MD = """## Acme Editing Suite — feature summary (draft)
 - Automates repetitive editing tasks for video teams
 - Batch processing, timeline cleanup, review workflows
 """
@@ -334,10 +364,7 @@ def test_rules_security_headers() -> None:
 
 
 def test_rules_schema_json_ld() -> None:
-    bad_json = (
-        '<html><head><script type="application/ld+json">{not json</script>'
-        "</head><body></body></html>"
-    )
+    bad_json = '<html><head><script type="application/ld+json">{not json</script></head><body></body></html>'
     audit = onboard.audit_html(bad_json, status_code=200)
     assert _levels(audit, "schema-valid") == "error"
     no_fields = '<script type="application/ld+json">{"@type": "Product"}</script>'
@@ -346,7 +373,7 @@ def test_rules_schema_json_ld() -> None:
 
 
 def test_rules_heading_order_and_forms() -> None:
-    hmm = "<html><body><h3>Skip level</h3><form action=\"/go\"><input name=\"q\"></form></body></html>"
+    hmm = '<html><body><h3>Skip level</h3><form action="/go"><input name="q"></form></body></html>'
     audit = onboard.audit_html(hmm, status_code=200)
     assert _levels(audit, "a11y-heading-order") == "warning"  # starts with h3
     assert _levels(audit, "a11y-form-labels") == "warning"  # input without label
@@ -354,8 +381,8 @@ def test_rules_heading_order_and_forms() -> None:
 
 def test_rules_meta_refresh_and_mixed_content() -> None:
     html = (
-        "<html><head><meta http-equiv=\"refresh\" content=\"0;url=/new\">"
-        "</head><body><img src=\"http://cdn.example/pic.png\"></body></html>"
+        '<html><head><meta http-equiv="refresh" content="0;url=/new">'
+        '</head><body><img src="http://cdn.example/pic.png"></body></html>'
     )
     audit = onboard.audit_html(html, status_code=200, url="https://acme.example/")
     assert _levels(audit, "redirect-meta-refresh") == "warning"
@@ -408,14 +435,43 @@ def test_fetch_site_unreachable(ws) -> None:
 
 
 # ---------------------------------------------------------------------------
-# feature confirmation
+# product evidence confirmation
 # ---------------------------------------------------------------------------
 
 
 def test_confirm_requires_agent_draft(ws) -> None:
     onboard.save_site(ws, "acme", "https://acme.example.com")
-    with pytest.raises(UsageError, match="no feature summary yet"):
+    with pytest.raises(UsageError, match="no product evidence brief yet"):
         onboard.confirm_features(ws, "acme", "bob")
+
+
+def test_confirm_rejects_feature_only_draft(ws) -> None:
+    onboard.save_site(ws, "acme", "https://acme.example.com")
+    onboard.feature_path(ws, "acme").write_text(LEGACY_FEATURE_ONLY_SITE_MD, encoding="utf-8")
+
+    with pytest.raises(UsageError, match="missing required product input sections") as exc_info:
+        onboard.confirm_features(ws, "acme", "bob")
+
+    message = str(exc_info.value)
+    assert "Target audience" in message
+    assert "Feature" in message
+    assert "Advantage" in message
+    assert "Benefit" in message
+    assert "Limitations and non-capabilities" in message
+    assert "Competitor context" in message
+
+
+def test_site_status_reports_product_input_completeness(ws) -> None:
+    onboard.save_site(ws, "acme", "https://acme.example.com")
+    onboard.feature_path(ws, "acme").write_text(LEGACY_FEATURE_ONLY_SITE_MD, encoding="utf-8")
+    incomplete = onboard.site_status(ws, "acme")
+    assert incomplete["product_input_complete"] is False
+    assert "Benefit" in incomplete["missing_product_input_sections"]
+
+    onboard.feature_path(ws, "acme").write_text(GOOD_SITE_MD, encoding="utf-8")
+    complete = onboard.site_status(ws, "acme")
+    assert complete["product_input_complete"] is True
+    assert complete["missing_product_input_sections"] == []
 
 
 def test_confirm_marks_confirmed(ws) -> None:
@@ -534,7 +590,7 @@ def test_cli_confirm_flow_and_providers_status(tmp_path) -> None:
 
     code, _, err = _cli(data_dir, "onboard", "confirm", "acme", "--approver", "bob")
     assert code == 2
-    assert "no feature summary" in err
+    assert "no product evidence brief" in err
 
     brand_dir = data_dir / "default" / "brands" / "acme"
     brand_dir.mkdir(parents=True, exist_ok=True)

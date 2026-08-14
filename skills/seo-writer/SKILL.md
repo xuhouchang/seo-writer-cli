@@ -89,9 +89,18 @@ sw run create <brand> <project> --brief <topic.yaml>          # -> run_id
 sw run research <run_id>                                      # evidence_rows: N
 sw run validate-research <run_id>                             # gate; exit 1 if gaps
 
+# 2b. YOU create an evidence-backed content map, then import and render it
+sw run gap-map <run_id> --from-file content-map.json
+sw run render <run_id> --view content-map
+sw run render <run_id> --view opportunities
+
 # 3. YOU write the outline (structure requirements below) and import it
 #    (same file re-imported = idempotent; edited file = new revision)
 sw run outline <run_id> --from-file outline.md                # -> outline_revision: 1
+
+# 3b. render the section-bound viewpoint review; import the downloaded JSON
+sw run render <run_id> --view outline
+sw run import-review <run_id> <outline-review.json>           # -> new revision
 
 # 4. explicit human approval (the approver is audited)
 sw run approve <run_id> --revision 1 --approver "editor@example.com"
@@ -107,7 +116,24 @@ sw run validate <run_id>                                      # -> completed
 
 # 8. export: article.md + manifest.json (full traceability)
 sw run export <run_id> --format markdown [--out-dir ./out]
+sw run export <run_id> --format html [--out-dir ./out]
 ```
+
+## Content map and outline review
+
+The content map uses only current-run evidence ids and classifies gaps as
+`topic`, `intent`, `format`, or `depth`. A blank competitor area is not an
+opportunity unless buyer evidence and sampled competitor evidence both exist.
+Coverage uses the deterministic 0-3 rubric. Opportunity cards keep Market Gap
+Confidence, Brand Fit, and Differentiation Readiness separate; do not invent a
+combined demand score.
+
+Behavioural questions are allowed only after an outline/framework exists.
+Every contextual prompt must carry a `section_id` or `viewpoint_id`, and each
+Viewpoint Card has at most two high-value prompts. Review choices are Confirm,
+Confirm with edits, Reject, Ask an internal expert, Add an example, and True,
+but confidential. Confidential input never enters customer-facing HTML or the
+final article export.
 
 ## Content requirements (what the CLI enforces)
 
@@ -155,6 +181,8 @@ image_alt_texts: ["…"]       # each ≤ 125 chars
 |---|---|---|
 | `validate-research` exit 1 | gate gaps (queries/SERP/threads/subreddits/second platform) | run research again / add evidence; re-run gate |
 | `outline --from-file` exit 1 | structure markers missing or empty file | add the required `##`/`###` sections |
+| `gap-map` exit 1 | malformed map or unknown evidence id | use only evidence from `run evidence`; fix buyer and competitor refs |
+| `import-review` exit 1 | stale revision/input hash or unknown viewpoint | render the latest outline and import a fresh download |
 | `draft` / `metadata` exit 1 | no approval or approval invalidated (facts/policy changed) | `run approve` again; re-check `run status` |
 | `validate` exit 1 | claim-safety / length failures | fix the named sentences in draft.md / metadata.yaml, re-import with the **same** or **new** file as appropriate, re-validate |
 | `run.blocked` | provider failure or validation failure | `run retry --step <step>` after fixing the cause |

@@ -5,7 +5,7 @@ Onboarding is the first-run journey for a brand:
 1.  `onboard site`    — record the customer's website URL (local memory).
 2.  `onboard fetch`   — crawl it over plain HTTP (no API key needed), run a
                        baseline SEO audit, keep the page text for the agent.
-3.  `onboard confirm` — a human confirms the agent-authored feature summary.
+3.  `onboard confirm` — a human confirms the agent-authored product evidence brief.
 4.  `providers`       — configure DataForSEO / Reddit credentials (stored
                        chmod-600, never in git) and verify the connections.
 
@@ -46,6 +46,18 @@ PROVIDERS: dict[str, dict[str, str]] = {
     "dataforseo": {"login": "login", "password": "password"},
     "reddit": {"client_id": "client_id", "client_secret": "client_secret"},
 }
+
+REQUIRED_PRODUCT_INPUT_SECTIONS = (
+    "What the product does",
+    "Target audience",
+    "Feature",
+    "Advantage",
+    "Benefit",
+    "Limitations and non-capabilities",
+    "Competitor context",
+    "Claims to avoid",
+    "Open questions for the customer",
+)
 
 
 def _write_yaml(path: Path, payload: Any) -> None:
@@ -107,7 +119,7 @@ def save_site(ws: Workspace, slug: str, url: str) -> dict[str, Any]:
 
 
 def site_status(ws: Workspace, slug: str) -> dict[str, Any]:
-    """Onboarding progress for a brand: profile, crawl artifacts, feature draft."""
+    """Onboarding progress for a brand: profile, crawl artifacts, product input."""
     profile = load_site(ws, slug)
     if profile is None:
         raise UsageError(
@@ -115,6 +127,24 @@ def site_status(ws: Workspace, slug: str) -> dict[str, Any]:
         )
     crawl = crawl_dir(ws, slug)
     fp = feature_path(ws, slug)
+    draft = fp.read_text(encoding="utf-8") if fp.exists() else ""
+    missing_sections = _missing_product_input_sections(draft)
+    review_path = brand_dir(ws, slug) / "reviews" / "brand-profile-review.json"
+    brand_profile_review = None
+    if review_path.is_file():
+        try:
+            review = json.loads(review_path.read_text(encoding="utf-8"))
+            profile = review.get("profile", {})
+            brand_profile_review = {
+                "revision": review.get("revision"),
+                "input_hash": review.get("input_hash"),
+                "content_language": profile.get("content_language", "en"),
+                "known_limitations_count": len(profile.get("limitations_and_non_capabilities", [])),
+                "competitor_candidates_count": len(profile.get("competitor_candidates_and_alternatives", [])),
+                "factual_followups": profile.get("factual_followups", []),
+            }
+        except (json.JSONDecodeError, TypeError):
+            brand_profile_review = {"error": "invalid local brand-profile-review.json"}
     return {
         "site": slug,
         "url": profile.get("url"),
@@ -129,7 +159,12 @@ def site_status(ws: Workspace, slug: str) -> dict[str, Any]:
             "exists": (crawl / "seo-audit.yaml").exists(),
         },
         "feature_file": str(fp),
-        "feature_drafted": fp.exists() and fp.read_text(encoding="utf-8").strip() != "",
+        # Preserve the established keys for CLI consumers while exposing the
+        # stricter product-input readiness gate separately.
+        "feature_drafted": bool(draft.strip()),
+        "product_input_complete": bool(draft.strip()) and not missing_sections,
+        "missing_product_input_sections": missing_sections,
+        "brand_profile_review": brand_profile_review,
     }
 
 
@@ -578,8 +613,23 @@ def fetch_site(ws: Workspace, slug: str, *, timeout: float = 15.0) -> dict[str, 
 
 
 # ---------------------------------------------------------------------------
-# feature confirmation
+# product evidence confirmation
 # ---------------------------------------------------------------------------
+
+
+def _missing_product_input_sections(markdown: str) -> list[str]:
+    """Return required headings that are absent or have no substantive body."""
+    sections: dict[str, list[str]] = {}
+    current: str | None = None
+    for line in markdown.splitlines():
+        heading = re.match(r"^#{3,6}\s+(.+?)\s*$", line)
+        if heading:
+            current = heading.group(1).strip().casefold()
+            sections.setdefault(current, [])
+        elif current is not None and line.strip():
+            sections[current].append(line.strip())
+
+    return [name for name in REQUIRED_PRODUCT_INPUT_SECTIONS if not sections.get(name.casefold())]
 
 
 def confirm_features(ws: Workspace, slug: str, approver: str) -> dict[str, Any]:
@@ -591,7 +641,16 @@ def confirm_features(ws: Workspace, slug: str, approver: str) -> dict[str, Any]:
     fp = feature_path(ws, slug)
     if not fp.exists() or not fp.read_text(encoding="utf-8").strip():
         raise UsageError(
-            f"no feature summary yet; an agent writes it to {fp}, the customer reviews it, then confirm"
+            f"no product evidence brief yet; an agent writes it to {fp}, "
+            "the customer reviews it, then confirm"
+        )
+    markdown = fp.read_text(encoding="utf-8")
+    missing = _missing_product_input_sections(markdown)
+    if missing:
+        raise UsageError(
+            "missing required product input sections in "
+            f"{fp}: {', '.join(missing)}; add evidence-backed content or explicitly "
+            "state that the source does not say and ask the customer to confirm"
         )
     profile["status"] = "confirmed"
     profile["confirmed_by"] = approver

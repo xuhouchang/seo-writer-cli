@@ -37,10 +37,14 @@ brand_facts_app = typer.Typer(help="Per-brand fact ledger.", no_args_is_help=Tru
 brand_policy_app = typer.Typer(help="Per-brand run policy.", no_args_is_help=True)
 project_app = typer.Typer(help="Project management.", no_args_is_help=True)
 run_app = typer.Typer(help="ArticleRun lifecycle.", no_args_is_help=True)
-onboard_app = typer.Typer(help="New-brand onboarding (site memory, crawl, audit, confirmation).",
-    no_args_is_help=True,)
-providers_app = typer.Typer(help="Provider credential configuration (DataForSEO, Reddit).",
-    no_args_is_help=True,)
+onboard_app = typer.Typer(
+    help="New-brand onboarding (site memory, crawl, audit, confirmation).",
+    no_args_is_help=True,
+)
+providers_app = typer.Typer(
+    help="Provider credential configuration (DataForSEO, Reddit).",
+    no_args_is_help=True,
+)
 gsc_app = typer.Typer(help="Google Search Console closed loop (measure → iterate).", no_args_is_help=True)
 
 app.add_typer(brand_app, name="brand")
@@ -170,6 +174,7 @@ def main() -> int:
 @app.command()
 def init() -> None:
     """Create the workspace (database + objects directory) if missing."""
+
     def run() -> dict[str, str]:
         ws, db = _open()
         db.close()
@@ -258,14 +263,44 @@ def onboard_status(
 @onboard_app.command("confirm")
 def onboard_confirm(
     slug: Annotated[str, typer.Argument(help="Brand slug")],
-    approver: Annotated[str | None, typer.Option(help="Who confirms the feature summary")] = None,
+    approver: Annotated[str | None, typer.Option(help="Who confirms the product evidence brief")] = None,
 ) -> None:
-    """Step 3 — confirm the agent-authored feature summary after customer review."""
+    """Step 3 — confirm the agent-authored product evidence brief after customer review."""
 
     def run() -> dict:
         ws, db = _open()
         services.resolve_brand(db, slug)
         return onboard.confirm_features(ws, slug, approver or os.environ.get("USER", "cli"))
+
+    return _guard(run)
+
+
+@onboard_app.command("brand-profile")
+def onboard_brand_profile(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    out_dir: Annotated[str | None, typer.Option(help="Also copy review artifacts here")] = None,
+) -> None:
+    """Generate an English-only factual brand profile review HTML and JSON source."""
+
+    def run() -> dict:
+        ws, db = _open()
+        brand = services.resolve_brand(db, slug)
+        return services.generate_brand_profile_review(ws, db, brand, out_dir=out_dir)
+
+    return _guard(run)
+
+
+@onboard_app.command("import-brand-profile")
+def onboard_import_brand_profile(
+    slug: Annotated[str, typer.Argument(help="Brand slug")],
+    review_json: Annotated[str, typer.Argument(help="Downloaded brand-profile review JSON")],
+) -> None:
+    """Import a current factual review; stale revision or input hashes are rejected."""
+
+    def run() -> dict:
+        ws, db = _open()
+        brand = services.resolve_brand(db, slug)
+        return services.import_brand_profile_review(ws, db, brand, review_json)
 
     return _guard(run)
 
@@ -578,6 +613,51 @@ def run_outline(
     return _guard(run)
 
 
+@run_app.command("gap-map")
+def run_gap_map(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    from_file: Annotated[str, typer.Option("--from-file", help="content-map.json path")],
+) -> None:
+    """Import and validate a current-run evidence-backed content map."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, _brand, _policy = _run_context(db, run_id)
+        return services.import_gap_map(ws, db, article_run, from_file)
+
+    return _guard(run)
+
+
+@run_app.command("render")
+def run_render(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    view: Annotated[str, typer.Option("--view", help="content-map | opportunities | outline")],
+) -> None:
+    """Deterministically render a read-only self-contained HTML review."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, brand, _policy = _run_context(db, run_id)
+        return services.render_run_view(ws, db, article_run, brand, view)
+
+    return _guard(run)
+
+
+@run_app.command("import-review")
+def run_import_review(
+    run_id: Annotated[str, typer.Argument(help="Run id")],
+    review_json: Annotated[str, typer.Argument(help="Downloaded outline-review.json path")],
+) -> None:
+    """Import outline feedback and create a new, unapproved outline revision."""
+
+    def run() -> dict:
+        ws, db = _open()
+        article_run, brand, _policy = _run_context(db, run_id)
+        return services.import_outline_review(ws, db, article_run, brand, review_json)
+
+    return _guard(run)
+
+
 @run_app.command("approve")
 def run_approve(
     run_id: Annotated[str, typer.Argument(help="Run id")],
@@ -678,13 +758,13 @@ def run_validate(
 @run_app.command("export")
 def run_export(
     run_id: Annotated[str, typer.Argument(help="Run id")],
-    format: Annotated[str, typer.Option("--format", help="Export format (Phase 1: markdown)")] = "markdown",
-    out_dir: Annotated[str | None, typer.Option(help="Copy article.md + manifest.json here")] = None,
+    format: Annotated[str, typer.Option("--format", help="Export format: markdown | html")] = "markdown",
+    out_dir: Annotated[str | None, typer.Option(help="Copy article + manifest.json here")] = None,
     idempotency_key: Annotated[
         str | None, typer.Option(help="Deterministic key (defaults to run:{id}:export)")
     ] = None,
 ) -> None:
-    """Export a completed run: article.md + traceable manifest.json."""
+    """Export a completed run as article.md or article.html plus a traceable manifest."""
 
     def run() -> dict:
         ws, db = _open()
@@ -865,9 +945,7 @@ def gsc_inspect(
 @gsc_app.command("import")
 def gsc_import(
     brand: Annotated[str, typer.Option(help="Brand slug")],
-    csv_file: Annotated[
-        str, typer.Argument(help="GSC UI export CSV (Query/Page + metrics)")
-    ],
+    csv_file: Annotated[str, typer.Argument(help="GSC UI export CSV (Query/Page + metrics)")],
     property: Annotated[
         str | None, typer.Option(help="Property URL when the brand has no connected property")
     ] = None,

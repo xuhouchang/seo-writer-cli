@@ -27,6 +27,8 @@ EXTRA_FILES = [
     "docs/MIGRATION.md",
     "docs/RELEASE.md",
     "docs/SKILL-CLI-INTEGRATION-PLAN.md",
+    "docs/CONTENT-GAP-HTML-WORKFLOW-DEVELOPMENT-PLAN.md",
+    "docs/CONTENT-GAP-HTML-WORKFLOW-IMPLEMENTATION-STATUS.md",
 ]
 FORBIDDEN_SUFFIXES = {".csv", ".db", ".sqlite", ".sqlite3", ".pt", ".onnx", ".safetensors", ".bin"}
 
