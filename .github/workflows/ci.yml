@@ -18,7 +18,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --frozen
       - run: uv run ruff check .
-      - run: uv run pytest tests/ -q
+      - run: uv run pytest tests/ -q --cov=seo_writer --cov-report=term-missing --cov-fail-under=70
       - run: uv run python -m compileall -q src
       - run: uv lock --check
       - run: uv build

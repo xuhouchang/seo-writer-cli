@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -103,3 +104,53 @@ def test_quadrant_uses_levels_not_fake_coordinates(ws, db, tmp_path) -> None:
     assert "Brand Fit" in page and "Market Gap Confidence" in page
     assert "Prioritize" in page and "Validate" in page and "Reframe" in page and "Defer" in page
     assert "demand score" not in page.lower()
+
+
+def test_quadrant_assigns_unique_deterministic_slots_beyond_five_points(ws, db, tmp_path) -> None:
+    setup_brand(db)
+    ctx = happy_path(ws, db, tmp_path)
+    run, brand = ctx["run"], ctx["brand"]
+    content_map = _content_map(run["id"])
+    base = content_map["opportunities"][0]
+    content_map["opportunities"] = [
+        {
+            **base,
+            "opportunity_id": f"OPP-{index:02d}",
+            "title": (
+                "A long evidence-backed opportunity title that must remain readable on narrow screens "
+                "without inventing a shorter customer claim"
+                if index == 1
+                else f"Opportunity {index}"
+            ),
+        }
+        for index in range(1, 9)
+    ]
+    long_domain = "long-subdomain-for-layout-verification." + "segment-" * 12 + "example"
+    content_map["pages"][0]["domain"] = long_domain
+    evidence = db.list_evidence(run["id"])
+    long_url = "https://example.test/" + "evidence-segment/" * 20 + "source"
+    next(row for row in evidence if row["evidence_id"] == "SERP-01")["url"] = long_url
+    db.replace_run_evidence(run["id"], evidence)
+    path = tmp_path / "many-opportunities.json"
+    path.write_text(json.dumps(content_map), encoding="utf-8")
+    services.import_gap_map(ws, db, run, str(path))
+
+    first = services.render_run_view(ws, db, run, brand, "opportunities")
+    first_page = Path(first["html"]).read_text(encoding="utf-8")
+    content_view = services.render_run_view(ws, db, run, brand, "content-map")
+    content_page = Path(content_view["html"]).read_text(encoding="utf-8")
+    second = services.render_run_view(ws, db, run, brand, "opportunities")
+    second_page = Path(second["html"]).read_text(encoding="utf-8")
+    coordinates = re.findall(r'<circle cx="(\d+)" cy="(\d+)"', first_page)
+
+    assert len(coordinates) == 8
+    assert len(set(coordinates)) == 8
+    assert first_page == second_page
+    assert "A long evidence-backed opportunity title" in first_page
+    assert long_domain in content_page
+    assert long_url in content_page
+    assert "overflow-wrap:anywhere" in content_page
+    static_page = re.sub(r"<script\b[^>]*>.*?</script>", "", first_page, flags=re.DOTALL)
+    assert "Opportunity 8" in static_page
+    assert "Opportunity quadrant fallback" in static_page
+    assert "Core content remains readable without JavaScript" in static_page

@@ -73,6 +73,7 @@ class MockSerpProvider:
             request_fingerprint=fingerprint("query", keyword, variant, self.profile),
             cost_estimate=SERP_COST,
             source_confidence="mock_structured",
+            meta={"open_pages": int(self.fixture.get("open_pages", 5))},
         )
 
 

@@ -7,9 +7,10 @@ in these files; only profile references (keys come from env/secret store).
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SAFETY_LEVELS = {"safe", "qualified", "topic_specific", "blocked"}
 FETCH_METHODS = {
@@ -371,3 +372,57 @@ class ReviewEnvelope(BaseModel):
     reviewer: str = ""
     reviewed_at: str = ""
     decisions: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class OpportunityReviewDecision(BaseModel):
+    """The only mutable fields accepted from an opportunity review."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    opportunity_id: str
+    decision: Literal["prioritize", "validate", "reframe", "defer", "excluded"]
+    note: str = Field(default="", max_length=2000)
+
+
+class OpportunityReviewEnvelope(BaseModel):
+    """Strict, artifact-bound envelope downloaded from opportunity HTML."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal[1] = 1
+    review_type: Literal["opportunity"]
+    workspace: str
+    brand: str
+    project: str
+    article: str
+    run_id: str
+    revision: int = Field(ge=1)
+    content_map_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    artifact_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    manifest_hash: str = Field(pattern=r"^sha256:[0-9a-f]{64}$")
+    reviewer: str = Field(min_length=1, max_length=320)
+    reviewed_at: str = ""
+    decisions: list[OpportunityReviewDecision] = Field(default_factory=list)
+
+    @field_validator("decisions")
+    @classmethod
+    def unique_opportunity_ids(
+        cls, decisions: list[OpportunityReviewDecision]
+    ) -> list[OpportunityReviewDecision]:
+        ids = [item.opportunity_id for item in decisions]
+        if len(ids) != len(set(ids)):
+            raise ValueError("opportunity_id decisions must be unique")
+        return decisions
+
+    @field_validator("reviewed_at")
+    @classmethod
+    def reviewed_at_is_aware_iso8601(cls, value: str) -> str:
+        if not value:
+            return value
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("reviewed_at must be an ISO 8601 timestamp") from exc
+        if parsed.tzinfo is None:
+            raise ValueError("reviewed_at must include a timezone")
+        return value

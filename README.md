@@ -61,15 +61,17 @@ sw init
 sw brand create acme
 sw project create acme blog
 
-# import the *example* pack — replace with your customer's real facts first
+# import the *example* pack — synthetic facts + a mock-provider policy, so the
+# whole flow below runs OFFLINE with zero configuration (no credentials,
+# no network). Swap in your customer's real facts/policy when you're ready.
 sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
 sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
 
-# production: configure the user's own provider accounts before research
-sw providers configure --name dataforseo
-sw providers configure --name reddit
-sw providers status
-# import a policy selecting dataforseo + reddit + http (see the template)
+# optional — switch to real research providers (DataForSEO + Reddit + HTTP):
+#   sw providers configure --name dataforseo
+#   sw providers configure --name reddit
+#   sw providers status
+# then import examples/brand-packs/policy-real.template.yaml as the policy.
 
 sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
 sw run research <run-id>
@@ -208,6 +210,7 @@ map and render the local review reports:
 seo-writer --data-dir <dir> --workspace <workspace> --json run gap-map <run-id> --from-file content-map.json
 seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view content-map
 seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view opportunities
+seo-writer --data-dir <dir> --workspace <workspace> --json run import-opportunity-review <run-id> opportunity-review.json
 seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view outline
 seo-writer --data-dir <dir> --workspace <workspace> --json run import-review <run-id> outline-review.json
 seo-writer --data-dir <dir> --workspace <workspace> --json run export <run-id> --format html
@@ -216,6 +219,11 @@ seo-writer --data-dir <dir> --workspace <workspace> --json run export <run-id> -
 HTML is a self-contained customer review surface. JSON, Markdown, and YAML
 remain canonical. Coverage and opportunity graphics render only when enough
 deterministic data exists; every graphic has a table or text fallback.
+Opportunity feedback creates a new, audited opportunity revision. The strict
+download envelope binds workspace, brand, project, article, run, revision,
+content-map hash, artifact hash, and manifest hash. Only the editorial
+`decision` and non-confidential `note` fields are writable; research evidence
+and analysis dimensions remain immutable.
 
 ## Agent workflow — no LLM API needed
 

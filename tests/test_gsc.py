@@ -67,6 +67,16 @@ CLIENT_JSON = {
 # ---------------------------------------------------------------------------
 
 
+AUTH_ERROR_PAYLOAD = {
+    "error": {
+        "status": "UNAUTHENTICATED",
+        "message": (
+            "Request had invalid authentication credentials. Expected OAuth 2 access token..."
+        ),
+    }
+}
+
+
 def _sa_rows(day: str, dims: list[str], start_row: int, count: int) -> list[dict]:
     rows = []
     for i in range(count):
@@ -90,6 +100,9 @@ class _GscStub(BaseHTTPRequestHandler):
     sa_total = 3
     sa_page = 3
     sa_429_remaining = 0
+    sa_query_count = 0  # 1-based counter over searchAnalytics/query calls
+    sa_401_on_call = 0  # 0 = disabled; otherwise 401 on this call index (expired token)
+    sa_401_remaining = 0  # 0 = disabled; otherwise this many consecutive 401s
     inspect_payload = {
         "inspectionResult": {
             "indexStatusResult": {
@@ -145,6 +158,14 @@ class _GscStub(BaseHTTPRequestHandler):
             self._send(200, _GscStub.inspect_payload)
         elif path.endswith("/searchAnalytics/query"):
             self._record(body)
+            _GscStub.sa_query_count += 1
+            if _GscStub.sa_401_on_call and _GscStub.sa_query_count == _GscStub.sa_401_on_call:
+                self._send(401, AUTH_ERROR_PAYLOAD)
+                return
+            if _GscStub.sa_401_remaining > 0:
+                _GscStub.sa_401_remaining -= 1
+                self._send(401, AUTH_ERROR_PAYLOAD)
+                return
             if _GscStub.sa_429_remaining > 0:
                 _GscStub.sa_429_remaining -= 1
                 self._send(429, {"error": {"message": "Quota exceeded for quota metric 'Queries'."}})
@@ -173,6 +194,9 @@ def stub(monkeypatch):
     _GscStub.sa_total = 3
     _GscStub.sa_page = 3
     _GscStub.sa_429_remaining = 0
+    _GscStub.sa_query_count = 0
+    _GscStub.sa_401_on_call = 0
+    _GscStub.sa_401_remaining = 0
     _GscStub.inspect_payload = {
         "inspectionResult": {
             "indexStatusResult": {
@@ -730,6 +754,37 @@ def test_pull_resumes_after_interruption(ws, db, connected, stub):
     assert db.gsc_pull_complete(PROPERTY, "date,page", "2026-07-01")
 
 
+def test_pull_refreshes_expired_token_mid_pull_no_duplicates(ws, db, connected, stub, monkeypatch):
+    """A long-window pull that outlives the 1h access token recovers mid-run.
+
+    The 401 lands on page 2 of day 1 — after page 1 already upserted rows —
+    so this also proves the retry keeps the pull idempotent (no duplicate rows
+    from re-fetching a page) and the day is still marked complete.
+    """
+    monkeypatch.setattr(gsc, "ROW_LIMIT", 10)
+    _GscStub.sa_page = 10
+    _GscStub.sa_total = 25
+    _GscStub.sa_401_on_call = 2  # page 2 of (date,query) gets an expired-token 401
+    tokens_before = sum(1 for _, p, _ in _GscStub.requests if p == "/token")
+    result = gsc.pull_search_analytics(db, ws, "acme", start_date="2026-07-01", end_date="2026-07-01")
+    tokens_after = sum(1 for _, p, _ in _GscStub.requests if p == "/token")
+    assert tokens_after == tokens_before + 2  # initial lazy refresh + one mid-pull refresh
+    assert result["dates_pulled"] == 2
+    assert result["api_calls"] == 7  # 3 pages × 2 dims + 1 retried page
+    assert result["rows_written"] == 50
+    rows = db.gsc_query_rows(PROPERTY, "2026-07-01", "2026-07-01")
+    assert len(rows) == 50  # the retried page did not duplicate rows
+    assert db.gsc_pull_complete(PROPERTY, "date,query", "2026-07-01")
+    assert db.gsc_pull_complete(PROPERTY, "date,page", "2026-07-01")
+
+
+def test_pull_repeated_401_after_refresh_raises(ws, db, connected, stub):
+    """A refresh that still gets 401s (revoked access) must not loop forever."""
+    _GscStub.sa_401_remaining = 99  # every SA call 401s even after the refresh
+    with pytest.raises(gsc.GscAuthError):
+        gsc.pull_search_analytics(db, ws, "acme", start_date="2026-07-01", end_date="2026-07-01")
+
+
 def test_pull_paginates_with_start_row(ws, db, connected, stub, monkeypatch):
     monkeypatch.setattr(gsc, "ROW_LIMIT", 10)
     _GscStub.sa_page = 10
@@ -924,6 +979,21 @@ def test_import_csv_needs_date(ws, db, tmp_path):
     assert "Date" in str(exc.value)
 
 
+def test_import_csv_bad_number_is_usage_error_with_line(ws, db, tmp_path):
+    csv_text = (
+        "Date,Query,Impressions,Clicks,CTR,Position\n"
+        "2026-07-01,first,100,1,1.0%,4.0\n"
+        "2026-07-02,second,12abc,5,2.0%,3.0\n"
+    )
+    path = tmp_path / "export.csv"
+    path.write_text(csv_text, encoding="utf-8-sig")
+    with pytest.raises(UsageError) as exc:
+        gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    msg = str(exc.value)
+    assert "line 3" in msg
+    assert "Impressions" in msg and "12abc" in msg
+
+
 def test_csv_import_binds_property_as_offline_and_is_idempotent(ws, db, tmp_path):
     path = tmp_path / "export.csv"
     path.write_text(
@@ -1103,6 +1173,43 @@ def test_insights_reports(ws, db):
     assert rising[0]["growth"] == round((15 * 80) / (13 * 40), 2)
     assert result["partial"] is True
     assert "not a complete keyword database" in result["data_limit_note"]
+
+
+def test_insights_partial_false_when_window_fully_pulled(ws, db):
+    _seed_queries(db, ws)
+    end = date.today() - timedelta(days=3)
+    start = end - timedelta(days=27)
+    for dim in ("date,query", "date,page"):
+        for offset in range(28):
+            db.mark_gsc_pull_complete(PROPERTY, dim, (start + timedelta(days=offset)).isoformat())
+    result = gsc.insights(db, ws, "acme", window=28)
+    assert result["partial"] is False
+    assert result["coverage"] == 1.0
+
+
+def test_insights_partial_true_when_pull_incomplete(ws, db):
+    _seed_queries(db, ws)
+    end = date.today() - timedelta(days=3)
+    start = end - timedelta(days=27)
+    for offset in range(10):  # only the query dimension, first 10 days
+        db.mark_gsc_pull_complete(PROPERTY, "date,query", (start + timedelta(days=offset)).isoformat())
+    result = gsc.insights(db, ws, "acme", window=28)
+    assert result["partial"] is True
+    assert result["coverage"] == pytest.approx(10 / 56, abs=0.001)
+
+
+def test_insights_csv_source_coverage_by_dates(ws, db, tmp_path):
+    day = (date.today() - timedelta(days=3)).isoformat()
+    path = tmp_path / "export.csv"
+    path.write_text(
+        f"Date,Query,Impressions,Clicks,CTR,Position\n{day},first,100,1,1.0%,4.0\n",
+        encoding="utf-8-sig",
+    )
+    gsc.import_gsc_csv(db, ws, "acme", path, property_url=PROPERTY)
+    result = gsc.insights(db, ws, "acme", window=28)
+    assert result["source"] == "csv-import"
+    assert result["partial"] is True
+    assert result["coverage"] == round(1 / 28, 3)
 
 
 def test_cli_version_is_successful():

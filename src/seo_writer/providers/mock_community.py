@@ -60,6 +60,13 @@ class MockCommunityProvider:
             request_fingerprint=fingerprint("discover", query, self.profile),
             cost_estimate=DISCOVER_COST,
             source_confidence="mock_discovery",
+            meta={
+                "open_threads": int(self.fixture.get("open_threads", 10)),
+                "second_platform_threads": int(self.fixture.get("second_platform_threads", 1)),
+                "document_second_platform_insufficiency": bool(
+                    self.fixture.get("document_second_platform_insufficiency", False)
+                ),
+            },
         )
 
     def read_thread(self, url: str, platform: str) -> ProviderResult:

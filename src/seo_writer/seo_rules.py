@@ -136,7 +136,13 @@ _LEVEL_ORDER = {"ok": 0, "info": 1, "warning": 2, "error": 3}
 
 
 def _check(fn: Any, level: str, message: str, **data: Any) -> Check:
-    rid = fn.__name__.replace("_", "-")
+    """Build a Check, deriving the stable id and category from the rule.
+
+    The id is the explicit value passed to ``@rule(id=...)`` at decoration
+    time (``fn._rule_id``) — never derived from ``fn.__name__``, so renaming a
+    rule function cannot silently change its persisted baseline id.
+    """
+    rid = fn._rule_id
     return Check(rid, rid.split("-", 1)[0], level, message, data)
 
 
@@ -145,12 +151,30 @@ def _check(fn: Any, level: str, message: str, **data: Any) -> Check:
 # ---------------------------------------------------------------------------
 
 RULES: list[Any] = []
+_RULE_IDS: set[str] = set()
 
 
-def rule(fn: Any) -> Any:
-    """Register a rule function: `fn(doc, ctx) -> Check`."""
-    RULES.append(fn)
-    return fn
+def rule(*, id: str) -> Any:
+    """Register a rule function with an explicit, stable id.
+
+    ``@rule(id="core-title-present")`` is the only supported form. The id is
+    the persisted baseline identifier — it is pinned at decoration time and is
+    independent of the function name, so renaming a rule function never
+    silently changes the audit output (or breaks cross-version baselines).
+
+    A bare ``@rule`` (missing ``id=``) or a duplicate id is a hard error at
+    import time rather than a silent fallback.
+    """
+
+    def register(fn: Any) -> Any:
+        if id in _RULE_IDS:
+            raise ValueError(f"duplicate rule id {id!r} (second registration: {fn.__name__!r})")
+        _RULE_IDS.add(id)
+        fn._rule_id = id  # type: ignore[attr-defined]
+        RULES.append(fn)
+        return fn
+
+    return register
 
 
 def audit_doc(doc: Doc, ctx: Ctx) -> dict[str, Any]:
@@ -233,7 +257,7 @@ def _text_has(doc: Doc, *needles: str) -> bool:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="core-title-present")
 def core_title_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.titles:
@@ -243,7 +267,7 @@ def core_title_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_title_present, "ok", "Title tag present")
 
 
-@rule
+@rule(id="core-title-length")
 def core_title_length(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.title:
@@ -260,7 +284,7 @@ def core_title_length(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_title_length, "ok", f"Title length optimal ({n} chars)", length=n)
 
 
-@rule
+@rule(id="core-description-present")
 def core_description_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.meta_descriptions:
@@ -270,7 +294,7 @@ def core_description_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_description_present, "ok", "Meta description present")
 
 
-@rule
+@rule(id="core-description-length")
 def core_description_length(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.meta_description:
@@ -293,7 +317,7 @@ def core_description_length(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_description_length, "ok", f"Description length optimal ({n} chars)", length=n)
 
 
-@rule
+@rule(id="core-canonical-present")
 def core_canonical_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.canonicals:
@@ -301,7 +325,7 @@ def core_canonical_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_present, "ok", "Canonical link present", canonical=doc.canonicals[0])
 
 
-@rule
+@rule(id="core-canonical-valid")
 def core_canonical_valid(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.canonicals:
@@ -314,7 +338,7 @@ def core_canonical_valid(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_valid, "ok", "Canonical URL format valid")
 
 
-@rule
+@rule(id="core-canonical-conflicting")
 def core_canonical_conflicting(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     distinct = sorted(set(doc.canonicals))
@@ -325,7 +349,7 @@ def core_canonical_conflicting(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_conflicting, "ok", "Single canonical URL")
 
 
-@rule
+@rule(id="core-canonical-http-mismatch")
 def core_canonical_http_mismatch(doc: Doc, ctx: Ctx) -> Check:
     if not doc.canonicals:
         return _check(core_canonical_http_mismatch, "ok", "Skipped (no canonical)")
@@ -343,7 +367,7 @@ def core_canonical_http_mismatch(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_http_mismatch, "ok", "Canonical scheme matches page")
 
 
-@rule
+@rule(id="core-canonical-to-homepage")
 def core_canonical_to_homepage(doc: Doc, ctx: Ctx) -> Check:
     if not doc.canonicals or not ctx.url:
         return _check(core_canonical_to_homepage, "ok", "Skipped (no canonical or page URL)")
@@ -355,7 +379,7 @@ def core_canonical_to_homepage(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_to_homepage, "ok", "Canonical does not collapse to homepage")
 
 
-@rule
+@rule(id="core-canonical-to-noindex")
 def core_canonical_to_noindex(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.meta_robots and "noindex" in doc.meta_robots.lower() and doc.canonicals:
@@ -363,7 +387,7 @@ def core_canonical_to_noindex(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_to_noindex, "ok", "No canonical/noindex conflict")
 
 
-@rule
+@rule(id="core-canonical-header")
 def core_canonical_header(doc: Doc, ctx: Ctx) -> Check:
     header_link = ctx.headers.get("Link", "")
     m = re.search(r"<([^>]+)>\s*;\s*rel=\"?canonical\"?", header_link, re.I)
@@ -381,7 +405,7 @@ def core_canonical_header(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_canonical_header, "ok", "HTTP and HTML canonical agree")
 
 
-@rule
+@rule(id="core-viewport-present")
 def core_viewport_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.viewports:
@@ -389,7 +413,7 @@ def core_viewport_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_viewport_present, "ok", "Viewport meta present", value=doc.viewports[0])
 
 
-@rule
+@rule(id="core-favicon-present")
 def core_favicon_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.favicons:
@@ -397,7 +421,7 @@ def core_favicon_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_favicon_present, "ok", "Favicon declared", values=doc.favicons)
 
 
-@rule
+@rule(id="core-h1-present")
 def core_h1_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.h1s:
@@ -405,7 +429,7 @@ def core_h1_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_h1_present, "ok", "H1 heading present")
 
 
-@rule
+@rule(id="core-h1-single")
 def core_h1_single(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if len(doc.h1s) > 1:
@@ -420,7 +444,7 @@ def core_h1_single(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_h1_single, "ok", "Exactly one <h1>")
 
 
-@rule
+@rule(id="core-nosnippet")
 def core_nosnippet(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.meta_robots and "nosnippet" in doc.meta_robots.lower():
@@ -428,7 +452,7 @@ def core_nosnippet(doc: Doc, ctx: Ctx) -> Check:
     return _check(core_nosnippet, "ok", "Snippets not blocked")
 
 
-@rule
+@rule(id="core-robots-meta")
 def core_robots_meta(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.meta_robots:
@@ -441,7 +465,7 @@ def core_robots_meta(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="htmlval-missing-doctype")
 def htmlval_missing_doctype(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.has_doctype:
@@ -449,7 +473,7 @@ def htmlval_missing_doctype(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_missing_doctype, "ok", "DOCTYPE declared")
 
 
-@rule
+@rule(id="htmlval-missing-charset")
 def htmlval_missing_charset(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.charset:
@@ -457,7 +481,7 @@ def htmlval_missing_charset(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_missing_charset, "ok", "Charset declared", value=doc.charset)
 
 
-@rule
+@rule(id="htmlval-invalid-head")
 def htmlval_invalid_head(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.meta_in_body:
@@ -465,7 +489,7 @@ def htmlval_invalid_head(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_invalid_head, "ok", "Head contains only head elements")
 
 
-@rule
+@rule(id="htmlval-noscript-in-head")
 def htmlval_noscript_in_head(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.noscript_in_head:
@@ -473,7 +497,7 @@ def htmlval_noscript_in_head(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_noscript_in_head, "ok", "No noscript in head")
 
 
-@rule
+@rule(id="htmlval-multiple-heads")
 def htmlval_multiple_heads(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.head_count > 1:
@@ -481,7 +505,7 @@ def htmlval_multiple_heads(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_multiple_heads, "ok", "Single head element")
 
 
-@rule
+@rule(id="htmlval-lorem-ipsum")
 def htmlval_lorem_ipsum(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if "lorem ipsum" in doc.text.lower():
@@ -489,7 +513,7 @@ def htmlval_lorem_ipsum(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_lorem_ipsum, "ok", "No placeholder text")
 
 
-@rule
+@rule(id="htmlval-multiple-titles")
 def htmlval_multiple_titles(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if len(doc.titles) > 1:
@@ -502,7 +526,7 @@ def htmlval_multiple_titles(doc: Doc, ctx: Ctx) -> Check:
     return _check(htmlval_multiple_titles, "ok", "Single title tag")
 
 
-@rule
+@rule(id="htmlval-multiple-descriptions")
 def htmlval_multiple_descriptions(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if len(doc.meta_descriptions) > 1:
@@ -520,7 +544,7 @@ def htmlval_multiple_descriptions(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="social-og-title")
 def social_og_title(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.og.get("title"):
@@ -528,7 +552,7 @@ def social_og_title(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_og_title, "ok", "og:title present", value=doc.og["title"])
 
 
-@rule
+@rule(id="social-og-description")
 def social_og_description(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.og.get("description"):
@@ -536,7 +560,7 @@ def social_og_description(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_og_description, "ok", "og:description present")
 
 
-@rule
+@rule(id="social-og-image")
 def social_og_image(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.og.get("image"):
@@ -544,7 +568,7 @@ def social_og_image(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_og_image, "ok", "og:image present", value=doc.og["image"])
 
 
-@rule
+@rule(id="social-twitter-card")
 def social_twitter_card(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.twitter.get("card"):
@@ -552,7 +576,7 @@ def social_twitter_card(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_twitter_card, "ok", "Twitter card present", value=doc.twitter["card"])
 
 
-@rule
+@rule(id="social-og-url")
 def social_og_url(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.og.get("url"):
@@ -560,7 +584,7 @@ def social_og_url(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_og_url, "ok", "og:url present", value=doc.og["url"])
 
 
-@rule
+@rule(id="social-og-url-canonical")
 def social_og_url_canonical(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     og_url = doc.og.get("url")
@@ -575,7 +599,7 @@ def social_og_url_canonical(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_og_url_canonical, "ok", "og:url consistent with canonical")
 
 
-@rule
+@rule(id="social-share-buttons")
 def social_share_buttons(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if _text_has(doc, "share", "share this"):
@@ -583,7 +607,7 @@ def social_share_buttons(doc: Doc, ctx: Ctx) -> Check:
     return _check(social_share_buttons, "info", "No share controls on the page")
 
 
-@rule
+@rule(id="social-social-profiles")
 def social_social_profiles(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     social_hosts = (
@@ -611,7 +635,7 @@ def social_social_profiles(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="content-word-count")
 def content_word_count(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     n = len(doc.text.split())
@@ -622,7 +646,7 @@ def content_word_count(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_word_count, "ok", f"Substantial content ({n} words)", words=n)
 
 
-@rule
+@rule(id="content-meta-in-body")
 def content_meta_in_body(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.meta_in_body:
@@ -630,7 +654,7 @@ def content_meta_in_body(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_meta_in_body, "ok", "No meta tags in body")
 
 
-@rule
+@rule(id="content-heading-length")
 def content_heading_length(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     long = [h for tag, h in doc.headings if len(h) > 70]
@@ -641,7 +665,7 @@ def content_heading_length(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_heading_length, "ok", "Heading lengths within limits")
 
 
-@rule
+@rule(id="content-heading-unique")
 def content_heading_unique(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     texts = [h for _, h in doc.headings if h]
@@ -653,7 +677,7 @@ def content_heading_unique(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_heading_unique, "ok", "Headings are unique")
 
 
-@rule
+@rule(id="content-text-html-ratio")
 def content_text_html_ratio(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     html_len = max(len(doc.html), 1)
@@ -665,7 +689,7 @@ def content_text_html_ratio(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_text_html_ratio, "ok", f"Text-to-HTML ratio {ratio:.1f}%", ratio=round(ratio, 1))
 
 
-@rule
+@rule(id="content-title-same-as-h1")
 def content_title_same_as_h1(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.title and doc.h1s and doc.title.strip().lower() == doc.h1s[0].strip().lower():
@@ -673,7 +697,7 @@ def content_title_same_as_h1(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_title_same_as_h1, "ok", "Title and H1 differ")
 
 
-@rule
+@rule(id="content-title-pixel-width")
 def content_title_pixel_width(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.title:
@@ -685,7 +709,7 @@ def content_title_pixel_width(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_title_pixel_width, "ok", "Title fits SERP pixel budget")
 
 
-@rule
+@rule(id="content-description-pixel-width")
 def content_description_pixel_width(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.meta_description:
@@ -699,7 +723,7 @@ def content_description_pixel_width(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_description_pixel_width, "ok", "Description fits SERP pixel budget")
 
 
-@rule
+@rule(id="content-broken-html")
 def content_broken_html(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.broken_tags:
@@ -712,7 +736,7 @@ def content_broken_html(doc: Doc, ctx: Ctx) -> Check:
     return _check(content_broken_html, "ok", "Tags appear balanced")
 
 
-@rule
+@rule(id="content-keyword-stuffing")
 def content_keyword_stuffing(doc: Doc, ctx: Ctx) -> Check:
     if not ctx.keyword:
         return _check(content_keyword_stuffing, "ok", "Skipped (no focus keyword given)")
@@ -737,7 +761,7 @@ def content_keyword_stuffing(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="a11y-aria-labels")
 def a11y_aria_labels(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     controls = sum(1 for f in doc.forms for _ in range(f.input_count))
@@ -746,7 +770,7 @@ def a11y_aria_labels(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_aria_labels, "ok", "ARIA labels present where needed")
 
 
-@rule
+@rule(id="a11y-form-labels")
 def a11y_form_labels(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     unlabeled = [f for f in doc.forms if f.input_count and not f.has_label]
@@ -760,7 +784,7 @@ def a11y_form_labels(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_form_labels, "ok", "Form fields labelled")
 
 
-@rule
+@rule(id="a11y-heading-order")
 def a11y_heading_order(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.headings:
@@ -786,7 +810,7 @@ def a11y_heading_order(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_heading_order, "ok", "Heading order is logical")
 
 
-@rule
+@rule(id="a11y-landmark-regions")
 def a11y_landmark_regions(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.landmarks < 2:
@@ -799,7 +823,7 @@ def a11y_landmark_regions(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_landmark_regions, "ok", "Landmark regions present", landmarks=doc.landmarks)
 
 
-@rule
+@rule(id="a11y-link-text")
 def a11y_link_text(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     vague = [
@@ -818,7 +842,7 @@ def a11y_link_text(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_link_text, "ok", "Link text is descriptive")
 
 
-@rule
+@rule(id="a11y-skip-link")
 def a11y_skip_link(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.skip_link:
@@ -826,7 +850,7 @@ def a11y_skip_link(doc: Doc, ctx: Ctx) -> Check:
     return _check(a11y_skip_link, "info", "No skip-to-content link")
 
 
-@rule
+@rule(id="a11y-table-headers")
 def a11y_table_headers(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.tables and doc.tables_with_th < doc.tables:
@@ -845,7 +869,7 @@ def a11y_table_headers(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="images-alt-present")
 def images_alt_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     missing = [i for i in doc.imgs if i.alt is None and i.src]
@@ -860,7 +884,7 @@ def images_alt_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_alt_present, "ok", "All images have alt text")
 
 
-@rule
+@rule(id="images-alt-length")
 def images_alt_length(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     long = [i for i in doc.imgs if i.alt and len(i.alt) > 125]
@@ -871,7 +895,7 @@ def images_alt_length(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_alt_length, "ok", "Alt text lengths within limits")
 
 
-@rule
+@rule(id="images-dimensions")
 def images_dimensions(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     no_size = [i for i in doc.imgs if not i.has_dimensions and i.src]
@@ -885,7 +909,7 @@ def images_dimensions(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_dimensions, "ok", "Images declare dimensions")
 
 
-@rule
+@rule(id="images-lazy-loading")
 def images_lazy_loading(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.imgs:
@@ -898,7 +922,7 @@ def images_lazy_loading(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_lazy_loading, "ok", "Lazy loading used", count=lazy)
 
 
-@rule
+@rule(id="images-modern-format")
 def images_modern_format(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     legacy = [
@@ -916,7 +940,7 @@ def images_modern_format(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_modern_format, "ok", "Images use modern formats")
 
 
-@rule
+@rule(id="images-responsive")
 def images_responsive(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.imgs:
@@ -932,7 +956,7 @@ def images_responsive(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_responsive, "ok", "Responsive images (srcset) in use")
 
 
-@rule
+@rule(id="images-picture-element")
 def images_picture_element(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.imgs and not any(i.in_picture for i in doc.imgs):
@@ -940,7 +964,7 @@ def images_picture_element(doc: Doc, ctx: Ctx) -> Check:
     return _check(images_picture_element, "ok", "Picture element present or no images")
 
 
-@rule
+@rule(id="images-filename-quality")
 def images_filename_quality(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     generic = [
@@ -969,7 +993,7 @@ def _url_path(url: str | None) -> str | None:
     return urlparse(url).path or ""
 
 
-@rule
+@rule(id="url-uppercase")
 def url_uppercase(doc: Doc, ctx: Ctx) -> Check:
     path = _url_path(_url_of(doc, ctx))
     if path and any(c.isupper() for c in path):
@@ -977,7 +1001,7 @@ def url_uppercase(doc: Doc, ctx: Ctx) -> Check:
     return _check(url_uppercase, "ok", "URL path is lowercase")
 
 
-@rule
+@rule(id="url-underscores")
 def url_underscores(doc: Doc, ctx: Ctx) -> Check:
     path = _url_path(_url_of(doc, ctx))
     if path and "_" in path:
@@ -985,7 +1009,7 @@ def url_underscores(doc: Doc, ctx: Ctx) -> Check:
     return _check(url_underscores, "ok", "URL uses hyphens")
 
 
-@rule
+@rule(id="url-spaces")
 def url_spaces(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     if url and (" " in url or "%20" in url):
@@ -993,7 +1017,7 @@ def url_spaces(doc: Doc, ctx: Ctx) -> Check:
     return _check(url_spaces, "ok", "URL is space-free")
 
 
-@rule
+@rule(id="url-length")
 def url_length(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     if url and len(url) > 100:
@@ -1001,7 +1025,7 @@ def url_length(doc: Doc, ctx: Ctx) -> Check:
     return _check(url_length, "ok", "URL length within bounds")
 
 
-@rule
+@rule(id="url-parameters")
 def url_parameters(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     if url and "?" in url:
@@ -1011,7 +1035,7 @@ def url_parameters(doc: Doc, ctx: Ctx) -> Check:
     return _check(url_parameters, "ok", "URL is parameter-free")
 
 
-@rule
+@rule(id="url-tracking-params")
 def url_tracking_params(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     if url and re.search(r"[?&](utm_|fbclid|gclid|mc_cid|mc_eid|yclid)", url, re.I):
@@ -1024,7 +1048,7 @@ def url_tracking_params(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="mobile-viewport-width")
 def mobile_viewport_width(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.viewports:
@@ -1034,7 +1058,7 @@ def mobile_viewport_width(doc: Doc, ctx: Ctx) -> Check:
     return _check(mobile_viewport_width, "ok", "Viewport configured for mobile width")
 
 
-@rule
+@rule(id="mobile-multiple-viewports")
 def mobile_multiple_viewports(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if len(doc.viewports) > 1:
@@ -1049,7 +1073,7 @@ def mobile_multiple_viewports(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="i18n-lang-attribute")
 def i18n_lang_attribute(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.lang:
@@ -1059,7 +1083,7 @@ def i18n_lang_attribute(doc: Doc, ctx: Ctx) -> Check:
     return _check(i18n_lang_attribute, "ok", "lang attribute present", value=doc.lang)
 
 
-@rule
+@rule(id="i18n-hreflang-present")
 def i18n_hreflang_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.hreflangs:
@@ -1074,7 +1098,7 @@ def i18n_hreflang_present(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="security-https")
 def security_https(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     scheme = _page_scheme(url)
@@ -1087,7 +1111,7 @@ def security_https(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_https, "ok", "Skipped (unknown scheme)")
 
 
-@rule
+@rule(id="security-hsts")
 def security_hsts(doc: Doc, ctx: Ctx) -> Check:
     hdr = ctx.headers.get("Strict-Transport-Security", "")
     if not hdr:
@@ -1099,7 +1123,7 @@ def security_hsts(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_hsts, "ok", "HSTS header present")
 
 
-@rule
+@rule(id="security-csp")
 def security_csp(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if not ctx.headers.get("Content-Security-Policy", ""):
@@ -1107,7 +1131,7 @@ def security_csp(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_csp, "ok", "CSP header present")
 
 
-@rule
+@rule(id="security-x-frame")
 def security_x_frame(doc: Doc, ctx: Ctx) -> Check:
     hdr = ctx.headers.get("X-Frame-Options", "")
     csp = ctx.headers.get("Content-Security-Policy", "")
@@ -1118,7 +1142,7 @@ def security_x_frame(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_x_frame, "ok", "Frame protection present")
 
 
-@rule
+@rule(id="security-x-content-type")
 def security_x_content_type(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if not ctx.headers.get("X-Content-Type-Options", ""):
@@ -1126,7 +1150,7 @@ def security_x_content_type(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_x_content_type, "ok", "Content-type sniffing blocked")
 
 
-@rule
+@rule(id="security-referrer-policy")
 def security_referrer_policy(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if not ctx.headers.get("Referrer-Policy", ""):
@@ -1134,7 +1158,7 @@ def security_referrer_policy(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_referrer_policy, "ok", "Referrer policy set")
 
 
-@rule
+@rule(id="security-permissions-policy")
 def security_permissions_policy(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if not ctx.headers.get("Permissions-Policy", ""):
@@ -1142,7 +1166,7 @@ def security_permissions_policy(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_permissions_policy, "ok", "Permissions policy set")
 
 
-@rule
+@rule(id="security-external-links")
 def security_external_links(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     blanks = [ln for ln in doc.links if ln.blank and "noopener" not in ln.rel and "noreferrer" not in ln.rel]
@@ -1156,7 +1180,7 @@ def security_external_links(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_external_links, "ok", "External links open safely")
 
 
-@rule
+@rule(id="security-form-https")
 def security_form_https(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     insecure = [f for f in doc.forms if f.action and urlparse(f.action).scheme == "http"]
@@ -1165,7 +1189,7 @@ def security_form_https(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_form_https, "ok", "Forms submit over HTTPS")
 
 
-@rule
+@rule(id="security-mixed-content")
 def security_mixed_content(doc: Doc, ctx: Ctx) -> Check:
     scheme = _page_scheme(_url_of(doc, ctx))
     if scheme != "https":
@@ -1183,7 +1207,7 @@ def security_mixed_content(doc: Doc, ctx: Ctx) -> Check:
     return _check(security_mixed_content, "ok", "No mixed content")
 
 
-@rule
+@rule(id="security-protocol-relative")
 def security_protocol_relative(doc: Doc, ctx: Ctx) -> Check:
     scheme = _page_scheme(_url_of(doc, ctx))
     if scheme != "https":
@@ -1247,7 +1271,7 @@ def sitemap_looks_valid(text: str) -> bool:
     return (has_urlset or has_index) and "<loc>" in head
 
 
-@rule
+@rule(id="technical-reachability")
 def technical_reachability(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.status_code >= 400:
@@ -1259,7 +1283,7 @@ def technical_reachability(doc: Doc, ctx: Ctx) -> Check:
     )
 
 
-@rule
+@rule(id="technical-robots-txt-exists")
 def technical_robots_txt_exists(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.robots is None:
@@ -1269,7 +1293,7 @@ def technical_robots_txt_exists(doc: Doc, ctx: Ctx) -> Check:
     return _check(technical_robots_txt_exists, "ok", "robots.txt present")
 
 
-@rule
+@rule(id="technical-robots-txt-valid")
 def technical_robots_txt_valid(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.robots is None:
@@ -1285,7 +1309,7 @@ def technical_robots_txt_valid(doc: Doc, ctx: Ctx) -> Check:
     return _check(technical_robots_txt_valid, "ok", "robots.txt parses cleanly")
 
 
-@rule
+@rule(id="technical-sitemap-exists")
 def technical_sitemap_exists(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.sitemap is None:
@@ -1293,7 +1317,7 @@ def technical_sitemap_exists(doc: Doc, ctx: Ctx) -> Check:
     return _check(technical_sitemap_exists, "ok", "Sitemap present")
 
 
-@rule
+@rule(id="technical-sitemap-valid")
 def technical_sitemap_valid(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.sitemap is None:
@@ -1307,7 +1331,7 @@ def technical_sitemap_valid(doc: Doc, ctx: Ctx) -> Check:
     return _check(technical_sitemap_valid, "ok", "Sitemap structure valid")
 
 
-@rule
+@rule(id="crawl-sitemap-in-robotstxt")
 def crawl_sitemap_in_robotstxt(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.robots is None:
@@ -1319,7 +1343,7 @@ def crawl_sitemap_in_robotstxt(doc: Doc, ctx: Ctx) -> Check:
     return _check(crawl_sitemap_in_robotstxt, "ok", "Sitemap declared in robots.txt", sitemaps=declared)
 
 
-@rule
+@rule(id="technical-trailing-slash")
 def technical_trailing_slash(doc: Doc, ctx: Ctx) -> Check:
     url = _url_of(doc, ctx)
     if not url:
@@ -1332,7 +1356,7 @@ def technical_trailing_slash(doc: Doc, ctx: Ctx) -> Check:
     return _check(technical_trailing_slash, "ok", "URL convention consistent")
 
 
-@rule
+@rule(id="technical-bad-content-type")
 def technical_bad_content_type(doc: Doc, ctx: Ctx) -> Check:
     del doc
     ctype = ctx.headers.get("Content-Type", "")
@@ -1351,7 +1375,7 @@ def technical_bad_content_type(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="redirect-meta-refresh")
 def redirect_meta_refresh(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.meta_refresh:
@@ -1380,7 +1404,7 @@ def _parse_jsonld(doc: Doc) -> list[dict[str, Any]]:
     return items
 
 
-@rule
+@rule(id="schema-present")
 def schema_present(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if not doc.jsonld:
@@ -1388,7 +1412,7 @@ def schema_present(doc: Doc, ctx: Ctx) -> Check:
     return _check(schema_present, "ok", "JSON-LD structured data present", count=len(doc.jsonld))
 
 
-@rule
+@rule(id="schema-valid")
 def schema_valid(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     bad = [b[:60] for b in doc.jsonld if not _jsonld_parses(b)]
@@ -1405,7 +1429,7 @@ def _jsonld_parses(blob: str) -> bool:
         return False
 
 
-@rule
+@rule(id="schema-required-fields")
 def schema_required_fields(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     missing: list[str] = []
@@ -1428,7 +1452,7 @@ def schema_required_fields(doc: Doc, ctx: Ctx) -> Check:
     return _check(schema_required_fields, "ok", "Structured data required fields present")
 
 
-@rule
+@rule(id="schema-type")
 def schema_type(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     types: set[str] = set()
@@ -1467,7 +1491,7 @@ def schema_type(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="eeat-contact-page")
 def eeat_contact_page(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     contact = [ln for ln in doc.links if ln.kind in ("mailto", "tel") or _vague_contact(ln.text)]
@@ -1480,7 +1504,7 @@ def _vague_contact(text: str) -> bool:
     return any(k in text.lower() for k in ("contact", "联系", "联系我们"))
 
 
-@rule
+@rule(id="eeat-privacy-policy")
 def eeat_privacy_policy(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     found = [ln for ln in doc.links if "privacy" in ln.text.lower() or "隐私" in ln.text]
@@ -1489,7 +1513,7 @@ def eeat_privacy_policy(doc: Doc, ctx: Ctx) -> Check:
     return _check(eeat_privacy_policy, "info", "No privacy policy link")
 
 
-@rule
+@rule(id="eeat-affiliate-disclosure")
 def eeat_affiliate_disclosure(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if _text_has(doc, "affiliate", "partner link", "disclosure", "推广", "佣金"):
@@ -1513,7 +1537,7 @@ AI_BOTS = (
 )
 
 
-@rule
+@rule(id="geo-semantic-html")
 def geo_semantic_html(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     semantic = doc.landmarks
@@ -1526,7 +1550,7 @@ def geo_semantic_html(doc: Doc, ctx: Ctx) -> Check:
     return _check(geo_semantic_html, "ok", "Semantic HTML structure present")
 
 
-@rule
+@rule(id="geo-ai-bot-access")
 def geo_ai_bot_access(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.robots is None:
@@ -1545,7 +1569,7 @@ def geo_ai_bot_access(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="legal-cookie-consent")
 def legal_cookie_consent(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if _text_has(doc, "cookie", "consent", "隐私设置"):
@@ -1558,7 +1582,7 @@ def legal_cookie_consent(doc: Doc, ctx: Ctx) -> Check:
 # ---------------------------------------------------------------------------
 
 
-@rule
+@rule(id="perf-response-time")
 def perf_response_time(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.elapsed_ms > 3000:
@@ -1571,7 +1595,7 @@ def perf_response_time(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_response_time, "ok", f"Response time {ctx.elapsed_ms}ms", ms=ctx.elapsed_ms)
 
 
-@rule
+@rule(id="perf-page-weight")
 def perf_page_weight(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if ctx.byte_size > 1_000_000:
@@ -1584,7 +1608,7 @@ def perf_page_weight(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_page_weight, "ok", f"Page weight {ctx.byte_size // 1024}KB", bytes=ctx.byte_size)
 
 
-@rule
+@rule(id="perf-dom-size")
 def perf_dom_size(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.element_count > 1500:
@@ -1597,7 +1621,7 @@ def perf_dom_size(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_dom_size, "ok", f"DOM size {doc.element_count} elements", count=doc.element_count)
 
 
-@rule
+@rule(id="perf-preconnect")
 def perf_preconnect(doc: Doc, ctx: Ctx) -> Check:
     del ctx
     if doc.preconnects == 0 and doc.links:
@@ -1605,7 +1629,7 @@ def perf_preconnect(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_preconnect, "ok", "Resource hints present", count=doc.preconnects)
 
 
-@rule
+@rule(id="perf-text-compression")
 def perf_text_compression(doc: Doc, ctx: Ctx) -> Check:
     del doc
     enc = (ctx.headers.get("Content-Encoding", "") or "").lower()
@@ -1614,7 +1638,7 @@ def perf_text_compression(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_text_compression, "ok", "Content compressed", encoding=enc)
 
 
-@rule
+@rule(id="perf-http2")
 def perf_http2(doc: Doc, ctx: Ctx) -> Check:
     del doc
     alt_svc = ctx.headers.get("Alt-Svc", "")
@@ -1623,7 +1647,7 @@ def perf_http2(doc: Doc, ctx: Ctx) -> Check:
     return _check(perf_http2, "ok", "HTTP/2 signalled")
 
 
-@rule
+@rule(id="perf-cache-policy")
 def perf_cache_policy(doc: Doc, ctx: Ctx) -> Check:
     del doc
     if not ctx.headers.get("Cache-Control", "") and not ctx.headers.get("Expires", ""):

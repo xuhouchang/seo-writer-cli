@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections import Counter
+from copy import deepcopy
 from html import escape
+from math import ceil, sqrt
 from pathlib import Path
 from typing import Any
 
@@ -17,7 +20,7 @@ from .config import Workspace
 from .db import Database
 from .errors import NotFoundError, UsageError, ValidationFailedError
 from .ids import hash_payload, sha256_text, utcnow
-from .models import BrandProfileReview, ContentMap, ReviewEnvelope
+from .models import BrandProfileReview, ContentMap, OpportunityReviewEnvelope, ReviewEnvelope
 from .renderers.html import render_report
 
 
@@ -246,6 +249,133 @@ def review_dir(ws: Workspace, run_id: str) -> Path:
     return ws.run_dir(run_id) / "reviews"
 
 
+def opportunity_dir(ws: Workspace, run_id: str) -> Path:
+    return gap_dir(ws, run_id) / "opportunities"
+
+
+def _project_article(db: Database, run: dict) -> tuple[str, str]:
+    project = db.get_project_by_id(run["project_id"])
+    if project is None:
+        raise NotFoundError(f"project id {run['project_id']} does not exist")
+    brief = json.loads(run["brief_snapshot"])
+    return project["slug"], brief["slug"]
+
+
+def _content_map_payload(ws: Workspace, run_id: str) -> tuple[Path, dict[str, Any], ContentMap]:
+    path = gap_dir(ws, run_id) / "content-map.json"
+    if not path.is_file():
+        raise NotFoundError("content-map.json does not exist; import a gap map first")
+    payload = _json(path)
+    supplied_hash = payload.get("input_hash")
+    unhashed = {key: value for key, value in payload.items() if key != "input_hash"}
+    expected_hash = _input_hash(unhashed)
+    if supplied_hash != expected_hash:
+        raise ValidationFailedError(["content-map.json input_hash does not match its content"], step="render")
+    try:
+        model = ContentMap.model_validate(payload)
+    except ValidationError as exc:
+        raise ValidationFailedError([str(exc)], step="render") from exc
+    return path, payload, model
+
+
+def _opportunity_paths(ws: Workspace, run_id: str, revision: int) -> tuple[Path, Path]:
+    root = opportunity_dir(ws, run_id)
+    return root / f"rev-{revision}.json", root / f"rev-{revision}.manifest.json"
+
+
+def _opportunity_revisions(ws: Workspace, run_id: str) -> list[int]:
+    revisions = []
+    for path in opportunity_dir(ws, run_id).glob("rev-*.json"):
+        match = re.fullmatch(r"rev-(\d+)\.json", path.name)
+        if match:
+            revisions.append(int(match.group(1)))
+    return sorted(revisions)
+
+
+def _write_opportunity_revision(
+    ws: Workspace,
+    db: Database,
+    run: dict,
+    brand: dict,
+    opportunities: list[dict[str, Any]],
+    content_map_hash: str,
+    revision: int,
+    parent_revision: int | None,
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any]]:
+    project, article = _project_article(db, run)
+    artifact = {
+        "schema_version": 1,
+        "review_type": "opportunity",
+        "workspace": ws.slug,
+        "brand": brand["slug"],
+        "project": project,
+        "article": article,
+        "run_id": run["id"],
+        "revision": revision,
+        "parent_revision": parent_revision,
+        "content_map_hash": content_map_hash,
+        "opportunities": opportunities,
+    }
+    artifact["artifact_hash"] = _input_hash(artifact)
+    manifest = {
+        key: artifact[key]
+        for key in (
+            "schema_version",
+            "review_type",
+            "workspace",
+            "brand",
+            "project",
+            "article",
+            "run_id",
+            "revision",
+            "parent_revision",
+            "content_map_hash",
+            "artifact_hash",
+        )
+    }
+    manifest["manifest_hash"] = _input_hash(manifest)
+    artifact_path, manifest_path = _opportunity_paths(ws, run["id"], revision)
+    _write_json(artifact_path, artifact)
+    _write_json(manifest_path, manifest)
+    return artifact_path, manifest_path, artifact, manifest
+
+
+def _current_opportunity_revision(
+    ws: Workspace, db: Database, run: dict, brand: dict, model: ContentMap, content_map_hash: str
+) -> tuple[Path, Path, dict[str, Any], dict[str, Any]]:
+    revisions = _opportunity_revisions(ws, run["id"])
+    if revisions:
+        latest = revisions[-1]
+        artifact_path, manifest_path = _opportunity_paths(ws, run["id"], latest)
+        artifact = _json(artifact_path)
+        if artifact.get("content_map_hash") == content_map_hash:
+            unhashed = {key: value for key, value in artifact.items() if key != "artifact_hash"}
+            if artifact.get("artifact_hash") != _input_hash(unhashed):
+                raise ValidationFailedError(
+                    ["opportunity artifact_hash does not match its content"], step="render"
+                )
+            if not manifest_path.is_file():
+                raise ValidationFailedError(["opportunity review manifest is missing"], step="render")
+            manifest = _json(manifest_path)
+            manifest_unhashed = {key: value for key, value in manifest.items() if key != "manifest_hash"}
+            if manifest.get("manifest_hash") != _input_hash(manifest_unhashed):
+                raise ValidationFailedError(
+                    ["opportunity manifest_hash does not match its content"], step="render"
+                )
+            return artifact_path, manifest_path, artifact, manifest
+    revision = (revisions[-1] + 1) if revisions else 1
+    return _write_opportunity_revision(
+        ws,
+        db,
+        run,
+        brand,
+        [item.model_dump(mode="json") for item in model.opportunities],
+        content_map_hash,
+        revision,
+        revisions[-1] if revisions else None,
+    )
+
+
 def import_gap_map(ws: Workspace, db: Database, run: dict, source: str) -> dict[str, Any]:
     sm.assert_step_authorized("gap_map", run["status"])
     try:
@@ -285,6 +415,38 @@ def import_gap_map(ws: Workspace, db: Database, run: dict, source: str) -> dict[
         run["id"], "gap_map.imported", {"input_hash": payload["input_hash"], "gap_count": len(model.gaps)}
     )
     return {"run_id": run["id"], "content_map": str(target), "input_hash": payload["input_hash"]}
+
+
+def validate_content_map_for_research(db: Database, run: dict) -> list[str]:
+    """Validate an existing map additively; absence preserves the established gate order."""
+    path = db.path.parent / "objects" / run["id"] / "gap" / "content-map.json"
+    if not path.is_file():
+        return []
+    try:
+        payload = _json(path)
+        supplied_hash = payload.get("input_hash")
+        unhashed = {key: value for key, value in payload.items() if key != "input_hash"}
+        if supplied_hash != _input_hash(unhashed):
+            return ["content-map.json input_hash does not match its content"]
+        model = ContentMap.model_validate(payload)
+    except (UsageError, ValidationError) as exc:
+        return [f"content-map.json is invalid: {exc}"]
+    if model.run_id != run["id"]:
+        return [f"content map run_id {model.run_id!r} does not match {run['id']!r}"]
+    known = {row["evidence_id"] for row in db.list_evidence(run["id"])}
+    refs: set[str] = set()
+    for page in model.pages:
+        refs.add(page.evidence_id)
+        refs.update(page.evidence_refs)
+        refs.update(page.coverage.evidence_refs)
+    for gap in model.gaps:
+        refs.update(gap.buyer_evidence_refs)
+        refs.update(gap.competitor_evidence_refs)
+    for opportunity in model.opportunities:
+        refs.update(opportunity.buyer_need.evidence_refs)
+        refs.update(opportunity.market_gap.evidence_refs)
+    unknown = sorted(refs - known)
+    return [f"unknown current-run evidence refs: {', '.join(unknown)}"] if unknown else []
 
 
 def _context(ws: Workspace, run: dict, brand: dict, title: str, input_hash: str) -> dict[str, Any]:
@@ -336,18 +498,25 @@ def _quadrant(model: ContentMap) -> str:
         return "<p>Opportunity quadrant is not rendered because fewer than three comparable opportunities are available.</p>"
     points = []
     cell_slots: dict[tuple[str, str], int] = {}
-    offsets = [(-36, -14), (0, 16), (36, -14), (-36, 24), (36, 24)]
-    for opportunity in model.opportunities:
+    cell_counts = Counter(
+        (item.brand_fit.level, item.market_gap.confidence) for item in model.opportunities
+    )
+    for marker, opportunity in enumerate(model.opportunities, 1):
         cell = (opportunity.brand_fit.level, opportunity.market_gap.confidence)
         slot = cell_slots.get(cell, 0)
         cell_slots[cell] = slot + 1
-        offset_x, offset_y = offsets[slot % len(offsets)]
+        columns = max(1, ceil(sqrt(cell_counts[cell])))
+        rows = max(1, ceil(cell_counts[cell] / columns))
+        spacing_x = min(30.0, 120.0 / max(columns - 1, 1))
+        spacing_y = min(26.0, 80.0 / max(rows - 1, 1))
+        offset_x = round((slot % columns - (columns - 1) / 2) * spacing_x)
+        offset_y = round((slot // columns - (rows - 1) / 2) * spacing_y)
         x = (110, 220, 310)[_LEVEL[opportunity.brand_fit.level]] + offset_x
         y = (300, 190, 90)[_LEVEL[opportunity.market_gap.confidence]] + offset_y
         color = "#1268d3" if opportunity.differentiation_readiness.status == "confirmed" else "#54a9c7"
         points.append(
             f'<g><circle cx="{x}" cy="{y}" r="9" fill="{color}"><title>{escape(opportunity.title)}</title></circle>'
-            f'<text x="{x - 18}" y="{y + 27}" font-size="11">{escape(opportunity.opportunity_id)}</text></g>'
+            f'<text x="{x}" y="{y + 3}" text-anchor="middle" font-size="8" fill="#071526">{marker}</text></g>'
         )
     table_rows = "".join(
         f"<tr><th>{escape(o.opportunity_id)}</th><td>{escape(o.title)}</td><td>{escape(o.brand_fit.level.title())}</td>"
@@ -362,10 +531,46 @@ def _quadrant(model: ContentMap) -> str:
         '<text x="270" y="45">Prioritize</text><text x="75" y="45">Validate</text><text x="270" y="330">Reframe</text><text x="75" y="330">Defer</text>'
         '<text x="180" y="382">Brand Fit</text><text transform="translate(15 260) rotate(-90)">Market Gap Confidence</text>'
         + "".join(points)
-        + "</svg><p>Legend: cobalt means confirmed readiness; cyan means input is needed or unknown.</p>"
+        + "</svg><p>Legend: cobalt means confirmed readiness; cyan means input is needed or unknown. Markers are numbered in table order.</p>"
         '<div class="table-wrap"><table><caption>Opportunity quadrant fallback</caption><thead><tr><th>ID</th><th>Opportunity</th><th>Brand fit</th><th>Market gap</th><th>Readiness</th></tr></thead>'
         f"<tbody>{table_rows}</tbody></table></div></div>"
     )
+
+
+def _opportunity_review_html(opportunities: list[dict[str, Any]]) -> str:
+    choices = (
+        ("prioritize", "Prioritize"),
+        ("validate", "Validate"),
+        ("reframe", "Reframe"),
+        ("defer", "Defer"),
+        ("excluded", "Exclude"),
+    )
+    cards = []
+    for item in opportunities:
+        current = item.get("decision", "candidate")
+        options = ['<option value="">No change</option>']
+        options.extend(
+            f'<option value="{value}"{" selected" if current == value else ""}>{label}</option>'
+            for value, label in choices
+        )
+        cards.append(
+            '<article class="record" data-decision><div>'
+            f'<h3>{escape(item["title"])}</h3>'
+            f'<p>{escape(item["opportunity_id"])} · Current decision: {escape(current.replace("_", " ").title())}</p>'
+            f'<input type="hidden" data-key="opportunity_id" value="{escape(item["opportunity_id"], quote=True)}">'
+            '<div class="field"><label>Editorial decision'
+            f'<select data-key="decision">{"".join(options)}</select></label>'
+            '<small>Choose only an editorial priority. Research evidence and scores cannot be edited here.</small></div>'
+            '<div class="field"><label>Review note<textarea data-key="note" maxlength="2000"></textarea></label>'
+            '<small>Optional editorial context. Do not include confidential information.</small></div>'
+            '</div><span class="status">Human decision</span></article>'
+        )
+    reviewer = (
+        '<div class="field"><label for="opportunity-reviewer">Reviewer</label>'
+        '<input id="opportunity-reviewer" data-review-field="reviewer" autocomplete="email" required>'
+        '<small>Use a name or email that can identify this review in the audit trail.</small></div>'
+    )
+    return reviewer + "".join(cards)
 
 
 def _outline_sidecar(ws: Workspace, db: Database, run: dict) -> tuple[Path, dict[str, Any]]:
@@ -477,11 +682,7 @@ def render_run_view(ws: Workspace, db: Database, run: dict, brand: dict, view: s
     sm.assert_step_authorized("render", run["status"])
     normalized = view.replace("_", "-")
     if normalized in {"content-map", "opportunities"}:
-        path = gap_dir(ws, run["id"]) / "content-map.json"
-        if not path.is_file():
-            raise NotFoundError("content-map.json does not exist; import a gap map first")
-        payload = _json(path)
-        model = ContentMap.model_validate(payload)
+        _path, payload, model = _content_map_payload(ws, run["id"])
         if normalized == "content-map":
             body = _heatmap(model)
             sections = [
@@ -502,29 +703,56 @@ def render_run_view(ws: Workspace, db: Database, run: dict, brand: dict, view: s
             title = "Content map"
             out = gap_dir(ws, run["id"]) / "content-map.html"
         else:
+            artifact_path, manifest_path, artifact, manifest = _current_opportunity_revision(
+                ws, db, run, brand, model, payload["input_hash"]
+            )
             sections = [
                 {"heading": "Opportunity map", "html": _quadrant(model)},
                 {
                     "heading": "Opportunity cards",
-                    "items": [
-                        {
-                            "title": item.title,
-                            "status": item.differentiation_readiness.status,
-                            "description": item.recommended_format,
-                        }
-                        for item in model.opportunities
-                    ],
-                },
-                {
-                    "heading": "Review status",
-                    "html": "<p>Opportunity feedback is read-only in this release. Evidence and decisions remain visible for review.</p>",
+                    "html": _opportunity_review_html(artifact["opportunities"]),
                 },
             ]
             title = "Opportunity map"
             out = gap_dir(ws, run["id"]) / "opportunity-map.html"
-        html = render_report(_context(ws, run, brand, title, payload["input_hash"]), sections)
+        context = _context(ws, run, brand, title, payload["input_hash"])
+        review_seed = None
+        if normalized == "opportunities":
+            context["revision"] = manifest["revision"]
+            context["download_label"] = "Download opportunity review JSON"
+            review_seed = {
+                **{
+                    key: manifest[key]
+                    for key in (
+                        "schema_version",
+                        "review_type",
+                        "workspace",
+                        "brand",
+                        "project",
+                        "article",
+                        "run_id",
+                        "revision",
+                        "content_map_hash",
+                        "artifact_hash",
+                        "manifest_hash",
+                    )
+                },
+                "reviewer": "",
+                "reviewed_at": "",
+                "decisions": [],
+            }
+        html = render_report(context, sections, review_seed=review_seed)
         out.write_text(html, encoding="utf-8")
-        return {"run_id": run["id"], "view": normalized, "html": str(out)}
+        result = {"run_id": run["id"], "view": normalized, "html": str(out)}
+        if normalized == "opportunities":
+            result.update(
+                {
+                    "opportunity_revision": manifest["revision"],
+                    "artifact": str(artifact_path),
+                    "review_manifest": str(manifest_path),
+                }
+            )
+        return result
     if normalized == "outline":
         sidecar_path, sidecar = _outline_sidecar(ws, db, run)
         seed = {
@@ -547,6 +775,126 @@ def render_run_view(ws: Workspace, db: Database, run: dict, brand: dict, view: s
         out.write_text(html, encoding="utf-8")
         return {"run_id": run["id"], "view": "outline", "html": str(out), "sidecar": str(sidecar_path)}
     raise UsageError("view must be one of: content-map, opportunities, outline")
+
+
+def import_opportunity_review(
+    ws: Workspace, db: Database, run: dict, brand: dict, source: str
+) -> dict[str, Any]:
+    sm.assert_step_authorized("import_opportunity_review", run["status"])
+    raw = _json(Path(source).expanduser())
+    try:
+        review = OpportunityReviewEnvelope.model_validate(raw)
+    except ValidationError as exc:
+        raise ValidationFailedError([str(exc)], step="import_opportunity_review") from exc
+
+    _map_path, content_map, model = _content_map_payload(ws, run["id"])
+    artifact_path, manifest_path, artifact, manifest = _current_opportunity_revision(
+        ws, db, run, brand, model, content_map["input_hash"]
+    )
+    expected = {
+        key: manifest[key]
+        for key in (
+            "review_type",
+            "workspace",
+            "brand",
+            "project",
+            "article",
+            "run_id",
+            "revision",
+            "content_map_hash",
+            "artifact_hash",
+            "manifest_hash",
+        )
+    }
+    errors = []
+    for field, value in expected.items():
+        actual = getattr(review, field)
+        if actual != value:
+            errors.append(f"stale or mismatched {field}: expected {value!r}, got {actual!r}")
+    known = {item["opportunity_id"] for item in artifact["opportunities"]}
+    unknown = sorted({item.opportunity_id for item in review.decisions} - known)
+    if unknown:
+        errors.append(f"unknown opportunity_id: {', '.join(unknown)}")
+    if errors:
+        raise ValidationFailedError(errors, step="import_opportunity_review")
+
+    imported_at = utcnow()
+    reviewed_at = review.reviewed_at or imported_at
+    source_path = Path(source).expanduser().resolve()
+    review_payload = review.model_dump(mode="json")
+    review_payload["reviewed_at"] = reviewed_at
+    review_payload["imported_at"] = imported_at
+    review_payload["source"] = str(source_path)
+    review_payload["source_hash"] = f"sha256:{sha256_text(source_path.read_text(encoding='utf-8'))}"
+    review_payload["review_hash"] = _input_hash(review_payload)
+    review_path = _write_json(
+        review_dir(ws, run["id"]) / f"opportunity-rev-{review.revision}.review.json",
+        review_payload,
+    )
+
+    decisions = {item.opportunity_id: item for item in review.decisions}
+    next_opportunities = deepcopy(artifact["opportunities"])
+    for item in next_opportunities:
+        decision = decisions.get(item["opportunity_id"])
+        if decision is None:
+            continue
+        item["decision"] = decision.decision
+        item["customer_review"] = {
+            "decision": decision.decision,
+            "note": decision.note,
+            "reviewer": review.reviewer,
+            "reviewed_at": reviewed_at,
+            "review_hash": review_payload["review_hash"],
+        }
+    new_revision = review.revision + 1
+    next_artifact_path, next_manifest_path, _next_artifact, next_manifest = (
+        _write_opportunity_revision(
+            ws,
+            db,
+            run,
+            brand,
+            next_opportunities,
+            review.content_map_hash,
+            new_revision,
+            review.revision,
+        )
+    )
+    change_summary = dict(sorted(Counter(item.decision for item in review.decisions).items()))
+    db.add_audit(
+        run["id"],
+        "opportunity.review_imported",
+        {
+            "source": str(source_path),
+            "source_hash": review_payload["source_hash"],
+            "review_hash": review_payload["review_hash"],
+            "reviewer": review.reviewer,
+            "reviewed_at": reviewed_at,
+            "imported_at": imported_at,
+            "parent_revision": review.revision,
+            "revision": new_revision,
+            "content_map_hash": review.content_map_hash,
+            "artifact_hash": next_manifest["artifact_hash"],
+            "manifest_hash": next_manifest["manifest_hash"],
+            "change_summary": change_summary,
+        },
+    )
+    if run.get("approved_revision") is not None:
+        db.supersede_approvals(run["id"], run["outline_revision"] + 1)
+        db.set_approved_revision(run["id"], None)
+        db.set_status(run["id"], sm.OUTLINE_PENDING, step="import_opportunity_review")
+        db.add_audit(
+            run["id"], "approval.invalidated", {"reason": "opportunity review changed"}
+        )
+    return {
+        "run_id": run["id"],
+        "opportunity_revision": new_revision,
+        "parent_revision": review.revision,
+        "artifact": str(next_artifact_path),
+        "review_manifest": str(next_manifest_path),
+        "review": str(review_path),
+        "review_hash": review_payload["review_hash"],
+        "change_summary": change_summary,
+    }
 
 
 def import_outline_review(ws: Workspace, db: Database, run: dict, brand: dict, source: str) -> dict[str, Any]:

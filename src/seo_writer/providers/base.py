@@ -26,6 +26,8 @@ class ProviderResult:
     token_estimate: int | None = None
     source_confidence: str = "mock"
     retryability: str = "none"
+    attempts: int = 1  # provider-side attempts for this call (incl. failed tries)
+    meta: dict[str, Any] = field(default_factory=dict)  # provider-declared tuning knobs
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +40,8 @@ class ProviderResult:
             "token_estimate": self.token_estimate,
             "source_confidence": self.source_confidence,
             "retryability": self.retryability,
+            "attempts": self.attempts,
+            "meta": self.meta,
         }
 
 

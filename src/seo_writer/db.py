@@ -301,6 +301,11 @@ class Database:
             ).fetchone()
         )
 
+    def get_project_by_id(self, project_id: int) -> dict[str, Any] | None:
+        return _row_to_dict(
+            self._conn.execute("SELECT * FROM projects WHERE id = ?", (project_id,)).fetchone()
+        )
+
     def list_projects(self, brand_id: int | None = None) -> list[dict[str, Any]]:
         if brand_id is None:
             return [dict(r) for r in self._conn.execute("SELECT * FROM projects ORDER BY id").fetchall()]
@@ -793,6 +798,15 @@ class Database:
             (property_url, dimension, data_date),
         ).fetchone()
         return row is not None
+
+    def gsc_pull_completed_in_range(self, property_url: str, start: str, end: str) -> int:
+        """Count completed (dimension, date) chunks in a date range (inclusive)."""
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM gsc_pull_state "
+            "WHERE property_url = ? AND data_date BETWEEN ? AND ?",
+            (property_url, start, end),
+        ).fetchone()
+        return int(row["n"] or 0)
 
     def upsert_gsc_inspection(self, row: dict[str, Any]) -> None:
         self._conn.execute(

@@ -52,6 +52,7 @@ class MockLLMProvider:
             ],
             token_estimate=tokens,
             source_confidence="mock",
+            attempts=self.call_count,  # includes failed tries, like the old call_count
         )
 
     # -- outline -----------------------------------------------------------

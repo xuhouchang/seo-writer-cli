@@ -48,6 +48,7 @@ STEP_AUTHORIZED: dict[str, frozenset[str]] = {
     "gap_map": frozenset({RESEARCHING, GATE_PASSED, OUTLINE_PENDING, APPROVED}),
     "render": frozenset(STATES - {CREATED}),
     "import_review": frozenset({OUTLINE_PENDING, APPROVED}),
+    "import_opportunity_review": frozenset({RESEARCHING, GATE_PASSED, OUTLINE_PENDING, APPROVED}),
     "approve": frozenset({OUTLINE_PENDING, APPROVED}),
     "draft": frozenset({OUTLINE_PENDING, APPROVED, DRAFTING, COMPLETED, BLOCKED}),
     "metadata": frozenset({OUTLINE_PENDING, DRAFTING, COMPLETED, BLOCKED}),

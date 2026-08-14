@@ -93,6 +93,8 @@ sw run validate-research <run_id>                             # gate; exit 1 if 
 sw run gap-map <run_id> --from-file content-map.json
 sw run render <run_id> --view content-map
 sw run render <run_id> --view opportunities
+# customer edits only priority/exclusion decisions and downloads the JSON
+sw run import-opportunity-review <run_id> <opportunity-review.json>  # -> new opportunity revision
 
 # 3. YOU write the outline (structure requirements below) and import it
 #    (same file re-imported = idempotent; edited file = new revision)
@@ -127,6 +129,16 @@ opportunity unless buyer evidence and sampled competitor evidence both exist.
 Coverage uses the deterministic 0-3 rubric. Opportunity cards keep Market Gap
 Confidence, Brand Fit, and Differentiation Readiness separate; do not invent a
 combined demand score.
+
+Opportunity review is a typed, fail-closed write-back step. Import only the
+JSON downloaded from the latest rendered page. The CLI checks workspace,
+brand, project, article, run, opportunity revision, content-map hash, artifact
+hash, manifest hash, decision fields, and opportunity ids. A successful import
+creates a new opportunity revision and audit event; it never overwrites
+`content-map.json` or changes evidence, Market Gap Confidence, Brand Fit, or
+Differentiation Readiness. Treat review notes as customer-visible and never put
+confidential information in them. Re-render after import before collecting
+more feedback.
 
 Behavioural questions are allowed only after an outline/framework exists.
 Every contextual prompt must carry a `section_id` or `viewpoint_id`, and each
@@ -182,6 +194,7 @@ image_alt_texts: ["…"]       # each ≤ 125 chars
 | `validate-research` exit 1 | gate gaps (queries/SERP/threads/subreddits/second platform) | run research again / add evidence; re-run gate |
 | `outline --from-file` exit 1 | structure markers missing or empty file | add the required `##`/`###` sections |
 | `gap-map` exit 1 | malformed map or unknown evidence id | use only evidence from `run evidence`; fix buyer and competitor refs |
+| `import-opportunity-review` exit 1 | stale/mismatched envelope, tampered hash, unknown field or opportunity | render the latest opportunity page and import a fresh, unmodified download |
 | `import-review` exit 1 | stale revision/input hash or unknown viewpoint | render the latest outline and import a fresh download |
 | `draft` / `metadata` exit 1 | no approval or approval invalidated (facts/policy changed) | `run approve` again; re-check `run status` |
 | `validate` exit 1 | claim-safety / length failures | fix the named sentences in draft.md / metadata.yaml, re-import with the **same** or **new** file as appropriate, re-validate |

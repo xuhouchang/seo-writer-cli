@@ -18,6 +18,7 @@ post-hoc review can prove what was *refused* and why, not just what passed.
 | `outline.generated` | outline revision created | revision, rules version |
 | `outline.approved` | human approval | revision, approver, facts hash |
 | `approval.invalidated` | facts/policy change demoted runs | run id, new snapshot hash |
+| `opportunity.review_imported` | typed opportunity feedback imported | source/hash, reviewer/times, parent/new revision, change summary, artifact/manifest hashes |
 | `retry.outline` / `retry.draft` | explicit step retries | previous status |
 | `draft.generated` | draft created | outline revision |
 | `metadata.generated` | metadata created | outline revision |
@@ -26,7 +27,7 @@ post-hoc review can prove what was *refused* and why, not just what passed.
 | `run.blocked` | any step blocked the run | step, reason |
 | `export.created` | export written | format, rules version |
 
-`rules_version` is a constant (`RULES_VERSION = "2026-08-08.1"`), stamped on
+`rules_version` is a constant (`RULES_VERSION = "2026-08-14.1"`), stamped on
 gate, outline, validation and export events so an article can be attributed
 to the exact rule set that governed it.
 

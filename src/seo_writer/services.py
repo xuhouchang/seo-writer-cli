@@ -45,13 +45,40 @@ from .workflow import (
     generate_brand_profile_review,  # noqa: F401 - public service facade
     import_brand_profile_review,  # noqa: F401 - public service facade
     import_gap_map,  # noqa: F401 - public service facade
+    import_opportunity_review,  # noqa: F401 - public service facade
     import_outline_review,  # noqa: F401 - public service facade
     render_article_html,
     render_run_view,  # noqa: F401 - public service facade
+    validate_content_map_for_research,
 )
 
 # Conservative per-call cost estimate used for the run budget pre-check.
 MAX_CALL_COST = {"keyword": 0.001, "serp": 0.002, "webfetch": 0.002, "community": 0.003, "llm": 0.03}
+
+
+def _latest_opportunity_artifacts(root: Path) -> dict[str, Path]:
+    candidates: list[tuple[int, Path]] = []
+    for path in (root / "gap" / "opportunities").glob("rev-*.json"):
+        if path.name.endswith(".manifest.json"):
+            continue
+        try:
+            revision = int(path.stem.removeprefix("rev-"))
+        except ValueError:
+            continue
+        candidates.append((revision, path))
+    if not candidates:
+        return {}
+    revision, artifact = max(candidates)
+    manifest = artifact.with_name(f"rev-{revision}.manifest.json")
+    files = {
+        "opportunity_artifact": artifact,
+        "opportunity_review_manifest": manifest,
+    }
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    parent = payload.get("parent_revision")
+    if parent is not None:
+        files["opportunity_review"] = root / "reviews" / f"opportunity-rev-{parent}.review.json"
+    return {name: path for name, path in files.items() if path.is_file()}
 
 
 def _approval_artifact_hashes(db: Database, run_id: str, revision: int) -> dict[str, str]:
@@ -61,6 +88,17 @@ def _approval_artifact_hashes(db: Database, run_id: str, revision: int) -> dict[
         "outline_sidecar_hash": root / "outlines" / f"rev-{revision}.json",
         "review_hash": root / "reviews" / f"outline-rev-{revision - 1}.review.json",
     }
+    opportunity_names = {
+        "opportunity_artifact": "opportunity_artifact_hash",
+        "opportunity_review_manifest": "opportunity_manifest_hash",
+        "opportunity_review": "opportunity_review_hash",
+    }
+    candidates.update(
+        {
+            opportunity_names[name]: path
+            for name, path in _latest_opportunity_artifacts(root).items()
+        }
+    )
     return {
         name: f"sha256:{sha256_text(path.read_text(encoding='utf-8'))}"
         for name, path in candidates.items()
@@ -323,6 +361,7 @@ def run_research(
             ("decision", "decision/comparison/failure"),
         ]
         organic_by_rank: dict[int, dict[str, Any]] = {}
+        open_count = 5  # provider-declared plan (result meta) may override
         for i, (variant, label) in enumerate(query_variants):
             q = _call(
                 db,
@@ -335,6 +374,8 @@ def run_research(
                 f"serp.query:{variant}",
                 lambda v=variant: serp.query(primary, v),
             )
+            if i == 0:
+                open_count = int(q.meta.get("open_pages", 5))
             organic = q.data.get("organic", [])
             for r in organic:
                 organic_by_rank.setdefault(r["rank"], r)
@@ -364,7 +405,6 @@ def run_research(
                 )
             )
         # open the top distinct pages (current-run opened, body fetched)
-        open_count = int(getattr(serp, "fixture", {}).get("open_pages", 5))
         for opened, rank in enumerate(sorted(organic_by_rank)):
             if opened >= open_count:
                 break
@@ -409,7 +449,7 @@ def run_research(
             lambda: community.discover(primary),
         )
         candidates = disc.data
-        fixture = getattr(community, "fixture", {})
+        plan = disc.meta
         for i, c in enumerate(candidates):
             rows.append(
                 _evidence_row(
@@ -424,9 +464,9 @@ def run_research(
                     grade="candidate",
                 )
             )
-        open_threads = int(fixture.get("open_threads", 10))
-        second_platform_threads = int(fixture.get("second_platform_threads", 1))
-        document_insufficiency = bool(fixture.get("document_second_platform_insufficiency", False))
+        open_threads = int(plan.get("open_threads", 10))
+        second_platform_threads = int(plan.get("second_platform_threads", 1))
+        document_insufficiency = bool(plan.get("document_second_platform_insufficiency", False))
         for n, c in enumerate(candidates):
             if n >= open_threads:
                 break
@@ -540,6 +580,13 @@ def validate_research(db: Database, run: dict, policy: PolicyYaml) -> dict:
             run_id, "research_gate.failed", {"errors": report.errors, "rules_version": RULES_VERSION}
         )
         raise ValidationFailedError(report.errors, step="validate_research")
+    gap_errors = validate_content_map_for_research(db, run)
+    if gap_errors:
+        db.set_status(run_id, sm.BLOCKED, step="research", failure_reason="; ".join(gap_errors))
+        db.add_audit(
+            run_id, "research_gate.failed", {"errors": gap_errors, "rules_version": RULES_VERSION}
+        )
+        raise ValidationFailedError(gap_errors, step="validate_research")
     db.set_status(run_id, sm.GATE_PASSED, step="research", failure_reason=None)
     db.add_audit(run_id, "research_gate.passed", {"rules_version": RULES_VERSION})
     return {"run_id": run_id, "status": sm.GATE_PASSED, "passed": True, "gaps": []}
@@ -609,7 +656,7 @@ def run_outline(
             _fail_blocked(db, run, "outline", f"{exc} (retryable={exc.retryable})")
             raise
         content = result.data["markdown"]
-        llm_calls = llm.call_count
+        llm_calls = result.attempts
     structure_errors = validate_outline_structure(content)
     if structure_errors:
         _fail_blocked(db, run, "outline", "; ".join(structure_errors))
@@ -706,7 +753,14 @@ def current_approval(db: Database, run: dict, brand: dict) -> dict:
         current_hashes = _approval_artifact_hashes(db, run["id"], run["approved_revision"])
         changed = [
             name
-            for name in ("gap_map_hash", "outline_sidecar_hash", "review_hash")
+            for name in (
+                "gap_map_hash",
+                "outline_sidecar_hash",
+                "review_hash",
+                "opportunity_artifact_hash",
+                "opportunity_manifest_hash",
+                "opportunity_review_hash",
+            )
             if name in bound and current_hashes.get(name) != bound[name]
         ]
         if changed:
@@ -774,7 +828,7 @@ def run_draft(
             _fail_blocked(db, run, "draft", f"{exc} (retryable={exc.retryable})")
             raise
         content = result.data["markdown"]
-        llm_calls = llm.call_count
+        llm_calls = result.attempts
     db.save_draft(run_id, run["approved_revision"], content, {})
     db.set_status(run_id, sm.DRAFTING, step="draft", failure_reason=None)
     origin = {"origin": "external"} if from_file else {}
@@ -849,7 +903,7 @@ def run_metadata(
             _fail_blocked(db, run, "metadata", f"{exc} (retryable={exc.retryable})")
             raise
         data = result.data
-        llm_calls = llm.call_count
+        llm_calls = result.attempts
     meta_errors = validate_metadata_lengths(data)
     if meta_errors:
         _fail_blocked(db, run, "metadata", "; ".join(meta_errors))
@@ -967,7 +1021,7 @@ def run_export(
         {"format": fmt, "rules_version": RULES_VERSION},
     )
     manifest = {
-        "manifest_version": 1,
+        "manifest_version": 2,
         "rules_version": RULES_VERSION,
         "run_id": run_id,
         "brand": brand["slug"],
@@ -1030,6 +1084,7 @@ def run_export(
         / "reviews"
         / f"outline-rev-{run['outline_revision'] - 1}.review.json",
     }
+    artifact_files.update(_latest_opportunity_artifacts(ws.run_dir(run_id)))
     manifest["artifacts"] = {
         key_name: {"path": str(path), "sha256": f"sha256:{sha256_text(path.read_text(encoding='utf-8'))}"}
         for key_name, path in artifact_files.items()

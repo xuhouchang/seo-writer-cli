@@ -24,6 +24,8 @@ def test_release_launcher_runs_offline_smoke() -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "passed"
     assert payload["external_requests"] == 0
+    assert "opportunity-review-artifacts" in payload["checks"]
+    assert "opportunity-review-cli" in payload["checks"]
 
 
 def test_release_bundle_is_curated_and_contains_no_private_data(tmp_path: Path) -> None:
@@ -52,7 +54,7 @@ def test_release_bundle_is_curated_and_contains_no_private_data(tmp_path: Path) 
         "/scripts/release_smoke.py",
         "/skills/seo-writer/SKILL.md",
         "/skills/seo-writer-onboarding/SKILL.md",
-        "/src/seo_writer/cli.py",
+        "/src/seo_writer/cli/__init__.py",
         "/pyproject.toml",
         "/uv.lock",
         "/LICENSE",
