@@ -81,3 +81,9 @@ def test_ci_runs_release_bundle_after_python_matrix() -> None:
     assert "scripts/release_smoke.py" in workflow
     assert "scripts/build_release_bundle.py" in workflow
     assert "actions/upload-artifact@v4" in workflow
+
+
+def test_ci_uses_supported_gitleaks_action_contract() -> None:
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    assert "gitleaks/gitleaks-action@v3" in workflow
+    assert "args: detect" not in workflow
