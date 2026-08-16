@@ -87,3 +87,4 @@ def test_ci_uses_supported_gitleaks_action_contract() -> None:
     workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "gitleaks/gitleaks-action@v3" in workflow
     assert "args: detect" not in workflow
+    assert "pull-requests: read" in workflow
