@@ -88,3 +88,4 @@ def test_ci_uses_supported_gitleaks_action_contract() -> None:
     assert "gitleaks/gitleaks-action@v3" in workflow
     assert "args: detect" not in workflow
     assert "pull-requests: read" in workflow
+    assert "fetch-depth: 0" in workflow
