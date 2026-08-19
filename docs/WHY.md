@@ -73,9 +73,9 @@ with a blank prompt.
 - **Write articles that clear a quality bar, every time.** From a one-line
   topic brief to a validated, claim-safe, exported article — with an audit
   trail the whole way.
-- **Use the AI agent you already trust.** You, CozeX, Claude, or any agent
-  write the outline, draft, and metadata as files; the CLI enforces the
-  governance. No LLM API key required.
+- **Use the AI agent you already trust.** You, Coze, Codex, Claude Code, or
+  any agent write the outline, draft, and metadata as files; the CLI enforces
+  the governance. No LLM API key required.
 - **Onboard a new brand properly.** Crawl the site, run a 0–100 SEO audit,
   extract an evidence-backed product brief, and confirm it with the customer —
   before the first article is written.
@@ -89,7 +89,7 @@ with a blank prompt.
 - **Independent SEOs and bloggers** who want AI speed without AI-slop quality.
 - **Content agencies** that need client-verifiable claims and an approval
   trail for every published post.
-- **AI power users** running CozeX, Claude Code, or local agents who want a
+- **AI power users** running Coze, Codex, Claude Code, or local agents who want a
   governed writing pipeline instead of "just ask the model."
 - **Teams under compliance pressure** who cannot afford one unverifiable claim
   in a published article.

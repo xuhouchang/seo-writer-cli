@@ -21,3 +21,4 @@ workspace/
 **/client.json
 .env
 .env.*
+.workbuddy/

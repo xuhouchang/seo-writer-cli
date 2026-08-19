@@ -1,132 +1,94 @@
 # seo-writer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Runs locally](https://img.shields.io/badge/runs%20locally-no%20data%20leaves%20your%20machine-2ea44f)](https://github.com/xuhouchang/seo-writer)
+[![No monthly fee](https://img.shields.io/badge/no%20monthly%20fee-ever-007ec6)](https://github.com/xuhouchang/seo-writer)
 
-Local-first, research-gated, claim-safe SEO content production CLI.
+> Stop publishing SEO articles that rank for nothing.
+> seo-writer turns a one-line brief into content with **real information gain, sourced claims, and a human sign-off** — the kind Google actually rewards.
 
-An opinionated pipeline that takes a topic brief through **research → gate →
-outline → human approval → draft → metadata → validation → export**, where every
-substantive product claim in the final copy is traceable to an approved entry
-in the brand's facts ledger, and every blocking rule is enforced with an audit
-trail — never silently downgraded.
+seo-writer is a **local-first content workflow**. You hand it a topic; it runs a *research → gate → human approval → draft* process and produces an article that's ready to publish — and ready to rank.
 
-The public product is an Agent Skill plus a local Python CLI. Production
-research uses user-configured DataForSEO, Reddit and plain HTTP page fetching;
-the bundled mock providers are only for tests and demonstrations. The Skill's
-agent-authored `--from-file` workflow does not require a CLI LLM key. Real
-provider calls happen only after the user manually configures and verifies
-their own accounts in the data directory.
+No subscription. No data leaving your computer. Nothing published without your okay.
 
-New here? Start with [`docs/WHY.md`](docs/WHY.md) — a plain-language
-explanation of the problem this solves, and the non-technical pitch.
+---
 
-## Why this shape
+## The SEO problem you already know
 
-- **The Skill + local CLI is the product.** The Skill governs the Agent
-  workflow; the CLI enforces state, approval, claims, audit and export. There
-  is no SaaS, web UI, payment flow or CMS publishing in this release.
-- **Research gate first.** An outline is never generated before the gate
-  passes (3 queries, 5 opened SERP pages, 10 opened community threads across
-  4 subreddits, second platform or documented insufficiency — floors equal to
-  the `seo-blog-writer` Skill, and policies cannot weaken them).
-- **No draft without explicit approval.** The outline sits in
-  `outline_pending_approval` until a human approves the exact revision.
-  Anything that invalidates that approval (facts update, policy update,
-  outline re-generation) demotes the run and blocks drafting until
-  re-approval. The refused path makes **zero LLM calls**.
-- **Claims trace to the facts ledger.** Blocked claims never reach the draft,
-  the FAQ, or the metadata. Material terms used in copy must have an approved
-  claim-id entry; the validator names the offending sentence.
-- **Idempotent by default.** Re-running a step with its default key
-  short-circuits: no duplicated provider costs, no duplicated artifacts, no
-  duplicated audit events. Explicit retries use fresh keys and re-cost.
+- **You ship 10 AI articles and none of them rank.** Google reads them as thin, generic, and recycled — and the Helpful Content system pushes them down.
+- **Your content sounds like everyone else's.** It's a blend of the current top 10, so it has **zero information gain** — there's no reason for Google to rank *you* over them.
+- **Bold claims with no source.** "Industry-leading", "studies show…" with nothing behind it. That wrecks **E-E-A-T** — and in finance, health, or B2B it's a compliance problem, not just a quality one.
+- **You write blind.** No idea what people actually search, what's trending, or where the gaps are — so you target demand that isn't there.
+- **Nothing gets reviewed before it goes live.** A risky sentence or a wrong stat ships, and you find out after.
+- **Your search data and your writing live in two different tools** that never talk to each other.
 
-## Quick start
+---
 
-```bash
-# source checkout or extracted release bundle (uv-managed; no PyPI)
-cd seo-writer
-uv sync --frozen
-./bin/seo-writer --version
+## What seo-writer gives you
 
-# smoke-test everything offline
-uv run pytest tests/ -q
-uv run ruff check .
+- **Information gain, enforced.** Before a word is drafted, it has to answer one question: *what does this add versus what already ranks?* — a sharper angle, a source competitors missed, a better answer.
+- **Every claim is sourced.** Each brand keeps a **facts ledger** — statements your team has actually approved. Any substantive claim with no citation is **blocked from publishing**, and the exact sentence is flagged.
+- **A human in the loop, every time.** The outline stops and waits for **your approval** before drafting continues. Change a fact or a policy and the old approval **expires automatically** — nothing gets a silent pass.
+- **Your real search data, put to work.** Connect **Google Search Console** to see which queries get impressions but no clicks, what's gaining, and where you're weak. Run a **0–100 site audit** to find where this round can actually win.
+
+---
+
+## How a ranking-ready article gets made
+
+```mermaid
+flowchart LR
+    A[One-line brief] --> B[Real research: competitors + real discussions]
+    B --> C{Has information gain?}
+    C -- No --> B
+    C -- Yes --> D[Outline + your angle]
+    D --> E[You approve]
+    E --> F[Draft + metadata]
+    F --> G{Every claim sourced?}
+    G -- No --> F
+    G -- Yes --> H[Export article + evidence manifest]
 ```
 
-Create a brand and run one article end to end:
+Everything runs on your machine, and every step is logged. There's no "auto-posted in the background" surprise.
 
-```bash
-export SEO_WRITER_DATA_DIR=~/.seo-writer     # optional; default is ~/.seo-writer
-alias sw="./bin/seo-writer --data-dir $SEO_WRITER_DATA_DIR"
+---
 
-sw init
-sw brand create acme
-sw project create acme blog
+## Generic AI article vs. a seo-writer article
 
-# import the *example* pack — synthetic facts + a mock-provider policy, so the
-# whole flow below runs OFFLINE with zero configuration (no credentials,
-# no network). Swap in your customer's real facts/policy when you're ready.
-sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
-sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
+> ❌ Generic: *"In today's digital era, the X industry faces unprecedented opportunities…"* — says nothing, ranks for nothing.
+>
+> ✅ seo-writer: *"The 3 buyer types we see all hit the same wall — and none of the top results explain it."* — has a position, has sources, has a reason to rank.
 
-# optional — switch to real research providers (DataForSEO + Reddit + HTTP):
-#   sw providers configure --name dataforseo
-#   sw providers configure --name reddit
-#   sw providers status
-# then import examples/brand-packs/policy-real.template.yaml as the policy.
+---
 
-sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
-sw run research <run-id>
-sw run validate-research <run-id>            # gate — blocks without evidence
-sw run outline <run-id>                      # outline_pending_approval
-sw run approve <run-id> --revision 1 --approver "you@example.com"
-sw run draft <run-id>
-sw run metadata <run-id>
-sw run validate <run-id>                     # claim-safety + structure — completes the run
-sw run export <run-id> --format markdown
-```
+## Who this is for
 
-Everything supports `--json` for scripting. Exit codes: `0` success,
-`1` business failure (gate/approval/validation — JSON error on stderr),
-`2` usage error.
+- **SEO / content / marketing operators** who want AI speed without the "AI slop" that doesn't move rankings.
+- **Content teams and agencies** where every published claim has to be defensible to a client, with an approval trail.
+- **Founders and compliance owners** who can't afford one unsourced sentence causing trouble.
+- **Teams already on Coze / agents** — point the agent at the workflow and the same gates still catch it.
 
-For the curated source bundle, installation, upgrade, rollback and release
-gates, see [`docs/RELEASE.md`](docs/RELEASE.md). SEO Writer is not published to
-PyPI.
+No SaaS. No monthly fee. No data leaves your computer.
 
-## For AI agents (CozeX, Claude Code, and friends)
+---
 
-SEO Writer is built to be driven by an agent. The agent writes the outline,
-draft and metadata as files; the CLI enforces research, approval, claim safety,
-idempotency and the audit trail. No LLM API key is needed — the whole pipeline
-runs through `--from-file`.
+## Privacy and security (your client-facing proof)
 
-Install once per machine (requires `uv`):
+- The repository **never contains any key, account, or credential**.
+- Your accounts and data live in a local folder on **your own machine** — nothing is sent to any third party.
+- The example brand pack is deliberately anonymous placeholder data. **Never commit a client's real facts ledger into the repo.**
+
+---
+
+## Quick start (for the person who installs it)
 
 ```bash
 git clone https://github.com/xuhouchang/seo-writer.git
 cd seo-writer
 uv sync --frozen
+
 export SEO_WRITER_HOME="$PWD"
+alias sw="$SEO_WRITER_HOME/bin/seo-writer --data-dir ~/.seo-writer"
 
-# register the skills with your agent host (CozeX, Claude, etc.):
-#   skills/seo-writer/             -> article production pipeline
-#   skills/seo-writer-onboarding/  -> new-brand setup + GSC
-```
-
-Point an explicit launcher at the repo instead of relying on `PATH`:
-
-```bash
-sw() {
-  "$SEO_WRITER_HOME/bin/seo-writer" \
-    --data-dir ~/.seo-writer --workspace default --json "$@"
-}
-```
-
-One article, end to end (offline, using the synthetic example pack):
-
-```bash
 sw init
 sw brand create acme
 sw project create acme blog
@@ -134,274 +96,28 @@ sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
 sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
 sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
 sw run research <run-id>
-sw run validate-research <run-id>          # gate — exit 1 if evidence is thin
-sw run outline <run-id> --from-file outline.md     # you write the file
-sw run approve <run-id> --revision 1 --approver "editor@example.com"
-sw run draft <run-id> --from-file draft.md         # approved claims only
+sw run validate-research <run-id>
+sw run outline <run-id> --from-file outline.md
+sw run approve <run-id> --revision 1 --approver "you@example.com"
+sw run draft <run-id> --from-file draft.md
 sw run metadata <run-id> --from-file metadata.yaml
-sw run validate <run-id>                          # claim-safe + structure
+sw run validate <run-id>
 sw run export <run-id> --format markdown
 ```
 
-The skills (`skills/seo-writer/SKILL.md`, `skills/seo-writer-onboarding/SKILL.md`)
-spell out the content requirements, the claim rules and the failure-handling
-table. Read the facts ledger with `sw brand facts show <brand>` before writing
-any copy. Why this pipeline exists at all — the problem it solves — is
-explained in plain terms in [`docs/WHY.md`](docs/WHY.md).
+Want real search and community signals? Configure **DataForSEO + Reddit** once, and the same commands run on live evidence. Full command reference: `seo-writer --help`.
 
-## CLI reference
+---
 
-```
-seo-writer init
-seo-writer brand create <slug>
-seo-writer brand list
-seo-writer brand facts import <slug> <facts.yaml>
-seo-writer brand facts show <slug>
-seo-writer brand policy import <slug> <policy.yaml>
-seo-writer brand policy show <slug>
-seo-writer project create <brand> <slug>
-seo-writer project list <brand>
-seo-writer run create <brand> <project> --brief <topic.yaml>
-seo-writer run list <brand> [--project <slug>]
-seo-writer run research <run-id>
-seo-writer run validate-research <run-id>
-seo-writer run outline <run-id> [--from-file outline.md]
-seo-writer run approve <run-id> --revision N --approver NAME
-seo-writer run draft <run-id> [--from-file draft.md]
-seo-writer run metadata <run-id> [--from-file metadata.yaml]
-seo-writer run validate <run-id>
-seo-writer run export <run-id> --format markdown [--out-dir DIR]
-seo-writer run status <run-id>
-seo-writer run evidence <run-id> [--json]
-seo-writer run costs <run-id>
-seo-writer run retry <run-id> --step research|outline|draft
-seo-writer onboard site <brand> --url https://…
-seo-writer onboard fetch <brand>
-seo-writer onboard confirm <brand> --approver NAME
-seo-writer onboard status <brand>
-seo-writer providers configure [--name dataforseo|reddit]
-seo-writer providers verify [--name dataforseo|reddit]
-seo-writer providers status
-seo-writer gsc setup <brand>                          # credential state + guidance
-seo-writer gsc auth <brand> [--no-launch-browser] [--gcloud]
-seo-writer gsc sites <brand>
-seo-writer gsc connect <brand> --property <url>       # bind property to brand
-seo-writer gsc pull <brand> [--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD] [--force] # incremental, idempotent
-seo-writer gsc inspect --brand <brand> --url <url>  # uses the bound property
-seo-writer gsc import <brand> <gsc.csv>                         # dated GSC UI export
-seo-writer gsc insights <brand> [--window 28]
-seo-writer --json gsc status --brand <brand>   # --json is a global flag
-```
+## Want the agent workflow or the technical design?
 
-GSC integration overview (zero third-party runtime deps, stdlib only):
+- `skills/seo-writer/` — the article production workflow (an agent follows it and won't get rejected)
+- `skills/seo-writer-onboarding/` — onboard a new brand + connect Search Console
+- [`docs/WHY.md`](docs/WHY.md) — the full problem and thesis
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — technical design
+- [`docs/RELEASE.md`](docs/RELEASE.md) — install / upgrade / release gates
+- [`docs/MIGRATION.md`](docs/MIGRATION.md) — configure real research sources
 
-- **`setup`** — three auth paths: A. gcloud ADC (preferred), B. own OAuth
-  client json (`import` via `setup` prompt, PKCE loopback flow via `auth`),
-  C. GSC UI CSV export fallback via `import`.
-- **`pull`** — Search Analytics (date+query / date+page dimensions),
-  25,000-row startRow pagination, incremental upsert skipping synced dates
-  (repeat runs make **zero** API calls; `--force` re-pulls), 429/5xx
-  exponential backoff (1s→60s + jitter) and a 1,200 QPM rate limiter.
-- **`insights`** — high-impressions/low-CTR queries, rising queries,
-  URL performance vs the `onboard fetch` audit baseline.
-- GSC is read-only: SEO Writer can inspect Search Console data and read local
-  or existing sitemap information, but never submits or changes a Sitemap.
-  Search Analytics exposes the most important rows subject to Google's
-  internal limits; results are not a complete keyword database. CSV fallback
-  imports must contain a real `Date` column and are labeled `csv-import`.
-- Credentials and GSC data stay on the customer machine
-  (`--data-dir/.../gsc/<brand>/`, token files chmod-600); nothing is sent to
-  third parties. See the GSC sections in `docs/ARCHITECTURE.md` for the design.
+---
 
-Global flags sit before the subcommand: `--data-dir`, `--json`, `--version`.
-
-## Onboarding a new brand
-
-New-brand setup is a four-step journey; a ready-made agent wrapper lives in
-`skills/seo-writer-onboarding/`:
-
-1. **`onboard site <brand> --url https://…`** — record the customer's website
-   as local brand memory (`brands/<slug>/site.yaml`). Interactive prompt when
-   `--url` is omitted.
-2. **`onboard fetch <brand>`** — crawl the site over plain HTTP (no key, no
-   LLM), keep `index.html` + `content.txt` + `seo-audit.yaml` under
-   `brands/<slug>/site-crawl/`, and run a category-scoped SEO audit scored
-   0–100. The rule set is a Python re-implementation of the static-checkable
-   subset of the MIT-licensed
-   [seo-skills/seo-audit-skill](https://github.com/seo-skills/seo-audit-skill)
-   (251 rules / 20 categories upstream; ~100 rules embedded here — see
-   `src/seo_writer/seo_rules.py` and `NOTICE`): core / htmlval / social /
-   content / a11y / images / url / mobile / i18n / security / technical /
-   crawl / redirect / schema / eeat / geo / legal / perf, plus robots.txt +
-   sitemap.xml checks fetched alongside the page (absence tolerated, reported
-   as findings). Each rule is
-   a pure standard-library check — no third-party runtime dependencies — with
-   `pass(100)/warn(50)/fail(0)` semantics mapped to
-   `ok(-0)/info(-2)/warning(-10)/error(-30)` and
-   `score = max(0, 100 − errors×30 − warnings×10 − infos×2)`. Every
-   `seo-audit.yaml` carries a `rubric` field naming the upstream source.
-3. **`onboard confirm <brand>`** — an agent (or you) writes an evidence-backed
-   product brief to `brands/<slug>/site.md` from the crawled text. It must
-   cover target audience; FAB (Feature, Advantage, Benefit); limitations and
-   non-capabilities; competitor context; unsupported claims; and open
-   questions. The customer reviews and edits it; `confirm` rejects missing or
-   empty sections, then stamps who approved and when.
-4. **`providers configure`** — interactive DataForSEO (login/password) and
-   Reddit (client_id/client_secret) setup. Secrets go to a chmod-600
-   `.secrets.yaml` in the data dir — never in git, never echoed — and every
-   provider is verified live on configure (DataForSEO ping, Reddit OAuth).
-   Env defaults are offered (DATAFORSEO_LOGIN/PASSWORD, REDDIT_CLIENT_ID/
-   CLIENT_SECRET); Reddit honours `REDDIT_PROXY_URL`. Production research
-   refuses to silently fall back to mock data when these providers are absent.
-
-The confirmed product evidence brief seeds `facts.yaml` for the production pipeline.
-The real search/community providers are selected by `policy.yaml`; configure
-and verify them before `run research`.
-
-### Content gap and local HTML review
-
-After the research gate passes, import a current-run evidence-backed content
-map and render the local review reports:
-
-```bash
-seo-writer --data-dir <dir> --workspace <workspace> --json run gap-map <run-id> --from-file content-map.json
-seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view content-map
-seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view opportunities
-seo-writer --data-dir <dir> --workspace <workspace> --json run import-opportunity-review <run-id> opportunity-review.json
-seo-writer --data-dir <dir> --workspace <workspace> --json run render <run-id> --view outline
-seo-writer --data-dir <dir> --workspace <workspace> --json run import-review <run-id> outline-review.json
-seo-writer --data-dir <dir> --workspace <workspace> --json run export <run-id> --format html
-```
-
-HTML is a self-contained customer review surface. JSON, Markdown, and YAML
-remain canonical. Coverage and opportunity graphics render only when enough
-deterministic data exists; every graphic has a table or text fallback.
-Opportunity feedback creates a new, audited opportunity revision. The strict
-download envelope binds workspace, brand, project, article, run, revision,
-content-map hash, artifact hash, and manifest hash. Only the editorial
-`decision` and non-confidential `note` fields are writable; research evidence
-and analysis dimensions remain immutable.
-
-## Agent workflow — no LLM API needed
-
-The CLI can run the whole pipeline with **you (or an agent) as the writer**:
-outline, draft and metadata are authored as files and imported with
-`--from-file`. The CLI skips its LLM provider entirely (zero calls, audit
-events marked `origin: external`) while enforcing everything else — gate,
-approval, claim safety, idempotency, revisioning.
-
-```bash
-seo-writer run research <run-id>
-seo-writer run validate-research <run-id>        # gate must pass
-# 1. write outline.md yourself (structure validated on import)
-seo-writer run outline <run-id> --from-file outline.md
-seo-writer run approve <run-id> --revision 1 --approver "editor@example.com"
-# 2. write draft.md yourself (approved claim wording only)
-seo-writer run draft <run-id> --from-file draft.md
-# 3. write metadata.yaml yourself (title ≤60 / desc ≤155 / alt ≤125)
-seo-writer run metadata <run-id> --from-file metadata.yaml
-seo-writer run validate <run-id>                 # agent-authored copy is validated too
-seo-writer run export <run-id> --format markdown
-```
-
-A ready-made agent wrapper lives in `skills/seo-writer/` (SKILL.md + content
-templates): it spells out the content requirements, the claim rules and the
-failure-handling table. Importing the same file twice is idempotent; editing
-the file and re-importing creates a new outline revision and invalidates the
-previous approval (re-approve).
-
-## Data model
-
-- **Brand** — isolated fact ledger + policy. Facts and policy are
-  *imported* per brand; nothing customer-specific ships in the repo.
-- **Project** — a topic bucket under a brand.
-- **Run** — one ArticleRun. State machine:
-  `created → researching → research_gate_passed → outline_pending_approval →
-  approved → drafting → completed → exported`, with
-  `researching/drafting → blocked` and `blocked → researching` (evidence or
-  provider remediation) or `blocked → outline_pending_approval` (approval
-  remediation only).
-- **SQLite** at `~/.seo-writer/<workspace>/seo-writer.db` — runs, commands,
-  costs, audits. **Objects** (outline revisions, draft, exported manifest)
-  at `<data-dir>/<workspace>/objects/<run-id>/`.
-
-Config holds provider *profile references* only; secrets never live in YAML.
-Production adapters read credentials from the user-owned data directory
-(`docs/MIGRATION.md`).
-
-## Evidence typing
-
-Every evidence row carries a strict origin, verified by tests:
-
-| `evidence_origin` | meaning |
-|---|---|
-| `current_run` | opened and read during this run (SERP pages, threads) |
-| `structured_discovery` | surfaced by an API/search step, not opened (keyword volume, SERP metadata) |
-| `snippet_only` | only a snippet was captured, the page was never opened |
-| `reused_prior_run_evidence` | carried over from an earlier run |
-
-The gate counts *opened* evidence only; snippet-only and reused rows never
-satisfy the floors.
-
-## Acceptance tests
-
-`tests/test_ac1..test_ac10` map 1:1 to the Phase 1 acceptance criteria:
-
-| AC | file | guarantees |
-|---|---|---|
-| 1 | `test_ac1_offline_mock_run.py` | full happy path offline with mock providers |
-| 2 | `test_ac2_brand_isolation.py` | facts/policy/claims/artifacts isolated per brand |
-| 3 | `test_ac3_gate_failure_blocks.py` | gate failure blocks outline, gaps reported + audited |
-| 4 | `test_ac4_unapproved_outline_blocks_draft.py` | unapproved outline blocks draft/metadata/validate, **zero LLM calls** on the refused path |
-| 5 | `test_ac5_blocked_claims_excluded.py` | blocked claims never reach draft/FAQ/metadata; injected copy fails validation |
-| 6 | `test_ac6_facts_change_invalidates_approval.py` | facts/policy/outline changes invalidate approval, demote the run |
-| 7 | `test_ac7_evidence_typing.py` | strict current-run / structured / snippet / reused typing |
-| 8 | `test_ac8_idempotency.py` | default-key reruns short-circuit; fresh-key retries re-cost |
-| 9 | `test_ac9_transient_vs_permanent.py` | transient errors retried per policy; permanent errors never retried |
-| 10 | `test_ac10_export_traceability.py` | manifest traces run, facts hash/version, rules version, outline revision + hash, approval, evidence ids, costs, audit events |
-
-## Repository layout
-
-```
-src/seo_writer/
-  cli.py                 # Typer command tree, --json output, exit-code mapping
-  services.py            # pipeline steps, approval model, idempotency, retry
-  state_machine.py       # transition table + step authorization
-  db.py                  # SQLite (runs, commands, costs, audits, approvals)
-  models.py              # Pydantic: FactsYaml / PolicyYaml / Brief / gate policy
-  facts.py               # facts import + snapshot hashing + approval invalidation
-  policy.py              # policy import + validation against Skill floors
-  ids.py                 # run ids, sha256, idempotency keys
-  onboard.py             # onboarding: site memory, crawl + SEO audit, provider config
-  seo_rules.py           # SEO audit rules (~100, seo-audit-skill MIT subset; see NOTICE)
-  validators/            # research_gate, claim_safety (pure, unit-testable)
-  providers/             # ProviderResult + real adapters and test-only mocks
-docs/                    # WHY.md (the pitch), ARCHITECTURE.md, ADR.md, MIGRATION.md, RELEASE.md
-skills/                  # seo-writer (production) + seo-writer-onboarding (brand setup)
-examples/brand-packs/    # generic-anonymous example pack (no customer facts)
-tests/                   # AC1–AC10 + validator units, fixture-driven mocks
-```
-
-## Roadmap
-
-- **Current public beta** — Skill onboarding, user-configured DataForSEO and
-  Reddit research, HTTP page evidence, GSC customer-data workflows, and the
-  local governance pipeline. Mocks remain the compatibility contract for
-  tests and demos.
-- **Future** — optional direct LLM provider support and additional search or
-  community adapters. The agent-authored file workflow is already supported.
-- **Phase 3 — commercial packaging** (usage metering) only when
-  there is a user base to justify it. The codebase is built so a hosted
-  gateway can be added without changing the CLI contract.
-
-## Security posture
-
-- No secrets, keys, or credentials in the repo — ever.
-- `~/.seo-writer` workspace is user-owned and gitignored.
-- Facts/claims are **project-isolated per brand**; the example pack is
-  deliberately anonymous. Never commit a customer's real facts ledger.
-- Real provider credentials are entered by the customer and stored only in the
-  chmod-600 data directory; they are never in policy YAML, artifacts, logs or
-  this repository. See `docs/MIGRATION.md` for provider details.
-- Model weights / provider artifacts never live in the repo (see global
-  `~/.cache/models/` convention in the developer environment rules).
+License: MIT
