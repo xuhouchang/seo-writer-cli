@@ -26,9 +26,9 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/xuhouchang/seo-writer"
-Repository = "https://github.com/xuhouchang/seo-writer"
-Issues = "https://github.com/xuhouchang/seo-writer/issues"
+Homepage = "https://github.com/xuhouchang/seo-writer-cli"
+Repository = "https://github.com/xuhouchang/seo-writer-cli"
+Issues = "https://github.com/xuhouchang/seo-writer-cli/issues"
 
 [project.scripts]
 seo-writer = "seo_writer.cli:main"

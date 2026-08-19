@@ -35,7 +35,7 @@ from . import seo_rules
 from .config import Workspace
 from .errors import UsageError
 
-USER_AGENT = "seo-writer-onboard/0.1 (+https://github.com/xuhouchang/seo-writer)"
+USER_AGENT = "seo-writer-onboard/0.1 (+https://github.com/xuhouchang/seo-writer-cli)"
 MAX_BODY_BYTES = 5 * 1024 * 1024
 MAX_TEXT_CHARS = 200_000
 

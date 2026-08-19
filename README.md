@@ -1,8 +1,8 @@
 # seo-writer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
-[![Runs locally](https://img.shields.io/badge/runs%20locally-no%20data%20leaves%20your%20machine-2ea44f)](https://github.com/xuhouchang/seo-writer)
-[![No monthly fee](https://img.shields.io/badge/no%20monthly%20fee-ever-007ec6)](https://github.com/xuhouchang/seo-writer)
+[![Runs locally](https://img.shields.io/badge/runs%20locally-no%20data%20leaves%20your%20machine-2ea44f)](https://github.com/xuhouchang/seo-writer-cli)
+[![No monthly fee](https://img.shields.io/badge/no%20monthly%20fee-ever-007ec6)](https://github.com/xuhouchang/seo-writer-cli)
 
 > Stop publishing SEO articles that rank for nothing.
 > seo-writer turns a one-line brief into content with **real information gain, sourced claims, and a human sign-off** — the kind Google actually rewards.
@@ -82,7 +82,7 @@ No SaaS. No monthly fee. No data leaves your computer.
 ## Quick start (for the person who installs it)
 
 ```bash
-git clone https://github.com/xuhouchang/seo-writer.git
+git clone https://github.com/xuhouchang/seo-writer-cli.git
 cd seo-writer
 uv sync --frozen
 
