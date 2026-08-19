@@ -17,6 +17,9 @@ agent-authored `--from-file` workflow does not require a CLI LLM key. Real
 provider calls happen only after the user manually configures and verifies
 their own accounts in the data directory.
 
+New here? Start with [`docs/WHY.md`](docs/WHY.md) — a plain-language
+explanation of the problem this solves, and the non-technical pitch.
+
 ## Why this shape
 
 - **The Skill + local CLI is the product.** The Skill governs the Agent
@@ -91,6 +94,60 @@ Everything supports `--json` for scripting. Exit codes: `0` success,
 For the curated source bundle, installation, upgrade, rollback and release
 gates, see [`docs/RELEASE.md`](docs/RELEASE.md). SEO Writer is not published to
 PyPI.
+
+## For AI agents (CozeX, Claude Code, and friends)
+
+SEO Writer is built to be driven by an agent. The agent writes the outline,
+draft and metadata as files; the CLI enforces research, approval, claim safety,
+idempotency and the audit trail. No LLM API key is needed — the whole pipeline
+runs through `--from-file`.
+
+Install once per machine (requires `uv`):
+
+```bash
+git clone https://github.com/xuhouchang/seo-writer.git
+cd seo-writer
+uv sync --frozen
+export SEO_WRITER_HOME="$PWD"
+
+# register the skills with your agent host (CozeX, Claude, etc.):
+#   skills/seo-writer/             -> article production pipeline
+#   skills/seo-writer-onboarding/  -> new-brand setup + GSC
+```
+
+Point an explicit launcher at the repo instead of relying on `PATH`:
+
+```bash
+sw() {
+  "$SEO_WRITER_HOME/bin/seo-writer" \
+    --data-dir ~/.seo-writer --workspace default --json "$@"
+}
+```
+
+One article, end to end (offline, using the synthetic example pack):
+
+```bash
+sw init
+sw brand create acme
+sw project create acme blog
+sw brand facts import acme examples/brand-packs/generic-acme/facts.yaml
+sw brand policy import acme examples/brand-packs/generic-acme/policy.yaml
+sw run create acme blog --brief examples/brand-packs/generic-acme/topics/workflow-decisions.yaml
+sw run research <run-id>
+sw run validate-research <run-id>          # gate — exit 1 if evidence is thin
+sw run outline <run-id> --from-file outline.md     # you write the file
+sw run approve <run-id> --revision 1 --approver "editor@example.com"
+sw run draft <run-id> --from-file draft.md         # approved claims only
+sw run metadata <run-id> --from-file metadata.yaml
+sw run validate <run-id>                          # claim-safe + structure
+sw run export <run-id> --format markdown
+```
+
+The skills (`skills/seo-writer/SKILL.md`, `skills/seo-writer-onboarding/SKILL.md`)
+spell out the content requirements, the claim rules and the failure-handling
+table. Read the facts ledger with `sw brand facts show <brand>` before writing
+any copy. Why this pipeline exists at all — the problem it solves — is
+explained in plain terms in [`docs/WHY.md`](docs/WHY.md).
 
 ## CLI reference
 
@@ -319,7 +376,7 @@ src/seo_writer/
   seo_rules.py           # SEO audit rules (~100, seo-audit-skill MIT subset; see NOTICE)
   validators/            # research_gate, claim_safety (pure, unit-testable)
   providers/             # ProviderResult + real adapters and test-only mocks
-docs/                    # ARCHITECTURE.md, AUDIT.md, MIGRATION.md
+docs/                    # WHY.md (the pitch), ARCHITECTURE.md, ADR.md, MIGRATION.md, RELEASE.md
 skills/                  # seo-writer (production) + seo-writer-onboarding (brand setup)
 examples/brand-packs/    # generic-anonymous example pack (no customer facts)
 tests/                   # AC1–AC10 + validator units, fixture-driven mocks
