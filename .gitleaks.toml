@@ -1,0 +1,13 @@
+title = "seo-writer gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Synthetic OAuth test fixtures in GSC unit tests (never real credentials)"
+paths = [
+    '''tests/test_gsc\.py''',
+]
+regexes = [
+    '''ya29\.(synthetic|code|test)''',
+]
