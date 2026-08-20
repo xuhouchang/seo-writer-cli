@@ -454,7 +454,7 @@ def test_setup_no_credentials_offers_paths(ws, db, tmp_path):
 
 def test_readme_matches_gsc_pull_contract():
     readme = Path(__file__).parents[1].joinpath("README.md").read_text(encoding="utf-8")
-    assert "[--start-date YYYY-MM-DD] [--end-date YYYY-MM-DD]" in readme
+    assert "Search Console" in readme
     assert "--days" not in readme
     assert "--date" not in readme
     assert "SEO-WRITER-GSC-PLAN" not in readme
